@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/model"
 	"github.com/mdombrov-33/relay/internal/run"
 	"github.com/mdombrov-33/relay/internal/tool"
@@ -55,6 +56,7 @@ func main() {
 
 	engine := workflow.Engine{
 		Client:       client,
+		Events:       &event.Log{},
 		Tools:        tools,
 		MaxSteps:     3,
 		ModelTimeout: time.Second,

@@ -8,6 +8,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/model"
 	"github.com/mdombrov-33/relay/internal/run"
 	"github.com/mdombrov-33/relay/internal/tool"
@@ -38,12 +39,32 @@ func (blockingTool) Execute(ctx context.Context, _ tool.Call) (tool.Output, erro
 }
 
 func TestEngineExecute(t *testing.T) {
+	t.Run("requires an event log before starting the run", func(t *testing.T) {
+		r := run.New("run-123")
+		engine := Engine{
+			Client:       model.NewScriptedClient(model.Response{Text: "Hello from Relay"}),
+			MaxSteps:     1,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
+		}
+
+		_, err := engine.Execute(context.Background(), &r, model.Request{})
+		if !errors.Is(err, ErrEventsNotConfigured) {
+			t.Fatalf("Execute() error = %v, want ErrEventsNotConfigured", err)
+		}
+		if r.Status != run.StatusPending {
+			t.Errorf("run status = %q, want %q", r.Status, run.StatusPending)
+		}
+	})
+
 	t.Run("returns the model response and succeeds the run", func(t *testing.T) {
 		r := run.New("run-123")
+		events := &event.Log{}
 		engine := Engine{
 			Client: model.NewScriptedClient(
 				model.Response{Text: "Hello from Relay"},
 			),
+			Events:       events,
 			MaxSteps:     1,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -69,12 +90,21 @@ func TestEngineExecute(t *testing.T) {
 		if r.Status != run.StatusSucceeded {
 			t.Fatalf("run status = %q, want %q", r.Status, run.StatusSucceeded)
 		}
+
+		assertEventTypes(t, events.Events(),
+			event.TypeWorkflowStarted,
+			event.TypeModelRequested,
+			event.TypeModelCompleted,
+			event.TypeWorkflowCompleted,
+		)
 	})
 
 	t.Run("marks the run failed when the model fails", func(t *testing.T) {
 		r := run.New("run-123")
+		events := &event.Log{}
 		engine := Engine{
 			Client:       model.NewScriptedClient(),
+			Events:       events,
 			MaxSteps:     1,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -88,12 +118,21 @@ func TestEngineExecute(t *testing.T) {
 		if r.Status != run.StatusFailed {
 			t.Fatalf("run status = %q, want %q", r.Status, run.StatusFailed)
 		}
+
+		assertEventTypes(t, events.Events(),
+			event.TypeWorkflowStarted,
+			event.TypeModelRequested,
+			event.TypeModelFailed,
+			event.TypeWorkflowFailed,
+		)
 	})
 
 	t.Run("cancels the run when the context is canceled", func(t *testing.T) {
 		r := run.New("run-123")
+		events := &event.Log{}
 		engine := Engine{
 			Client:       model.NewScriptedClient(),
+			Events:       events,
 			MaxSteps:     1,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -110,6 +149,11 @@ func TestEngineExecute(t *testing.T) {
 		if r.Status != run.StatusCanceled {
 			t.Fatalf("run status = %q, want %q", r.Status, run.StatusCanceled)
 		}
+
+		assertEventTypes(t, events.Events(),
+			event.TypeWorkflowStarted,
+			event.TypeWorkflowCancelled,
+		)
 	})
 
 	t.Run("executes a tool call before the final response", func(t *testing.T) {
@@ -138,8 +182,10 @@ func TestEngineExecute(t *testing.T) {
 		)
 
 		r := run.New("run-123")
+		events := &event.Log{}
 		engine := Engine{
 			Client:       client,
+			Events:       events,
 			Tools:        registry,
 			MaxSteps:     2,
 			ModelTimeout: time.Second,
@@ -203,6 +249,29 @@ func TestEngineExecute(t *testing.T) {
 		if customer.ID != "cust_123" {
 			t.Errorf("tool-result customer ID = %q, want %q", customer.ID, "cust_123")
 		}
+
+		assertEventTypes(t, events.Events(),
+			event.TypeWorkflowStarted,
+			event.TypeModelRequested,
+			event.TypeModelCompleted,
+			event.TypeToolRequested,
+			event.TypeToolCompleted,
+			event.TypeModelRequested,
+			event.TypeModelCompleted,
+			event.TypeWorkflowCompleted,
+		)
+
+		toolEvent := events.Events()[3]
+		var payload event.ToolPayload
+		if err := json.Unmarshal(toolEvent.Payload(), &payload); err != nil {
+			t.Fatalf("decode tool requested payload: %v", err)
+		}
+		if payload.CallID != "call_123" {
+			t.Errorf("tool requested call ID = %q, want %q", payload.CallID, "call_123")
+		}
+		if payload.ToolName != "lookup_customer" {
+			t.Errorf("tool requested name = %q, want %q", payload.ToolName, "lookup_customer")
+		}
 	})
 
 	t.Run("fails when the step limit is exhausted", func(t *testing.T) {
@@ -230,6 +299,7 @@ func TestEngineExecute(t *testing.T) {
 		r := run.New("run-123")
 		engine := Engine{
 			Client:       client,
+			Events:       &event.Log{},
 			Tools:        registry,
 			MaxSteps:     1,
 			ModelTimeout: time.Second,
@@ -291,8 +361,10 @@ func TestEngineExecute(t *testing.T) {
 		)
 
 		r := run.New("run-123")
+		events := &event.Log{}
 		engine := Engine{
 			Client:       client,
+			Events:       events,
 			Tools:        registry,
 			MaxSteps:     3,
 			ModelTimeout: time.Second,
@@ -352,6 +424,21 @@ func TestEngineExecute(t *testing.T) {
 		if incident.ID != "inc_123" {
 			t.Errorf("incident result ID = %q, want %q", incident.ID, "inc_123")
 		}
+
+		assertEventTypes(t, events.Events(),
+			event.TypeWorkflowStarted,
+			event.TypeModelRequested,
+			event.TypeModelCompleted,
+			event.TypeToolRequested,
+			event.TypeToolCompleted,
+			event.TypeModelRequested,
+			event.TypeModelCompleted,
+			event.TypeToolRequested,
+			event.TypeToolCompleted,
+			event.TypeModelRequested,
+			event.TypeModelCompleted,
+			event.TypeWorkflowCompleted,
+		)
 	})
 
 	t.Run("fails the run when a model call times out", func(t *testing.T) {
@@ -359,6 +446,7 @@ func TestEngineExecute(t *testing.T) {
 			r := run.New("run-123")
 			engine := Engine{
 				Client:       blockingClient{},
+				Events:       &event.Log{},
 				MaxSteps:     1,
 				ModelTimeout: time.Second,
 				ToolTimeout:  time.Second,
@@ -400,8 +488,10 @@ func TestEngineExecute(t *testing.T) {
 			})
 
 			r := run.New("run-123")
+			events := &event.Log{}
 			engine := Engine{
 				Client:       client,
+				Events:       events,
 				Tools:        registry,
 				MaxSteps:     1,
 				ModelTimeout: time.Second,
@@ -420,6 +510,15 @@ func TestEngineExecute(t *testing.T) {
 			if len(client.Requests()) != 1 {
 				t.Errorf("recorded requests = %d, want 1", len(client.Requests()))
 			}
+
+			assertEventTypes(t, events.Events(),
+				event.TypeWorkflowStarted,
+				event.TypeModelRequested,
+				event.TypeModelCompleted,
+				event.TypeToolRequested,
+				event.TypeToolFailed,
+				event.TypeWorkflowFailed,
+			)
 		})
 	})
 }
@@ -467,6 +566,7 @@ func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {
 
 		engine := Engine{
 			Client:       client,
+			Events:       &event.Log{},
 			Tools:        registry,
 			MaxSteps:     3,
 			ModelTimeout: time.Second,
@@ -518,5 +618,19 @@ func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {
 	}
 	if got := len(restartedClient.Requests()); got != 3 {
 		t.Errorf("restarted process model requests = %d, want 3", got)
+	}
+}
+
+func assertEventTypes(t *testing.T, events []event.Envelope, expected ...event.Type) {
+	t.Helper()
+
+	if len(events) != len(expected) {
+		t.Fatalf("event count = %d, want %d", len(events), len(expected))
+	}
+
+	for i, expectedType := range expected {
+		if got := events[i].Type(); got != expectedType {
+			t.Errorf("event %d type = %q, want %q", i, got, expectedType)
+		}
 	}
 }
