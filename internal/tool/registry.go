@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	ErrDuplicateTool = errors.New("duplicate tool name")
-	ErrToolNotFound  = errors.New("tool not found")
+	ErrDuplicateTool   = errors.New("duplicate tool name")
+	ErrInvalidToolName = errors.New("invalid tool name")
+	ErrToolNotFound    = errors.New("tool not found")
 )
 
 type Registry struct {
@@ -19,9 +20,12 @@ func NewRegistry(tools ...Tool) (*Registry, error) {
 
 	for _, candidate := range tools {
 		name := candidate.Spec().Name
+		if name == "" {
+			return nil, fmt.Errorf("%w: empty", ErrInvalidToolName)
+		}
 
 		if _, exists := byName[name]; exists {
-			return nil, fmt.Errorf("%w, %s", ErrDuplicateTool, name)
+			return nil, fmt.Errorf("%w: %q", ErrDuplicateTool, name)
 		}
 
 		byName[name] = candidate
@@ -34,7 +38,7 @@ func (r Registry) Lookup(name string) (Tool, error) {
 	candidate, exists := r.tools[name]
 
 	if !exists {
-		return nil, fmt.Errorf("%w, %s", ErrToolNotFound, name)
+		return nil, fmt.Errorf("%w: %q", ErrToolNotFound, name)
 	}
 
 	return candidate, nil

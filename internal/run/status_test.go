@@ -12,7 +12,7 @@ func TestStatusIsTerminal(t *testing.T) {
 		{"running is not terminal", StatusRunning, false},
 		{"succeeded is terminal", StatusSucceeded, true},
 		{"failed is terminal", StatusFailed, true},
-		{"cancelled is terminal", StatusCancelled, true},
+		{"canceled is terminal", StatusCanceled, true},
 	}
 
 	for _, tt := range tests {

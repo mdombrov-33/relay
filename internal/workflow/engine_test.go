@@ -55,4 +55,23 @@ func TestEngineExecute(t *testing.T) {
 			t.Fatalf("run status = %q, want %q", r.Status, run.StatusFailed)
 		}
 	})
+
+	t.Run("cancels the run when the context is canceled", func(t *testing.T) {
+		r := run.New("run-123")
+		engine := Engine{
+			Client: model.NewScriptedClient(),
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := engine.Execute(ctx, &r, model.Request{})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Execute() error = %v, want context.Canceled", err)
+		}
+
+		if r.Status != run.StatusCanceled {
+			t.Fatalf("run status = %q, want %q", r.Status, run.StatusCanceled)
+		}
+	})
 }

@@ -1,0 +1,28 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  enable:
+    - containedctx
+    - copyloopvar
+    - errcheck
+    - errname
+    - errorlint
+    - fatcontext
+    - forcetypeassert
+    - gosec
+    - govet
+    - misspell
+    - modernize
+    - nilerr
+    - noctx
+    - staticcheck
+    - thelper
+    - unused
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt

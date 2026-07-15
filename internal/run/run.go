@@ -6,6 +6,7 @@ var (
 	ErrCannotStart   = errors.New("only a pending run can start")
 	ErrCannotSucceed = errors.New("only a running run can succeed")
 	ErrCannotFail    = errors.New("only a running run can fail")
+	ErrCannotCancel  = errors.New("only a pending or running run can cancel")
 )
 
 type ID string
@@ -41,11 +42,20 @@ func (r *Run) Fail() error {
 }
 
 func (r *Run) Start() error {
-
 	if r.Status != StatusPending {
 		return ErrCannotStart
 	}
 
 	r.Status = StatusRunning
 	return nil
+}
+
+func (r *Run) Cancel() error {
+	switch r.Status {
+	case StatusPending, StatusRunning:
+		r.Status = StatusCanceled
+		return nil
+	default:
+		return ErrCannotCancel
+	}
 }

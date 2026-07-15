@@ -54,6 +54,14 @@ func TestNewRegistryRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestNewRegistryRejectsEmptyName(t *testing.T) {
+	_, err := NewRegistry(fakeTool{spec: Spec{}})
+
+	if !errors.Is(err, ErrInvalidToolName) {
+		t.Errorf("NewRegistry() error = %v, want ErrInvalidToolName", err)
+	}
+}
+
 func TestRegistryLookupReturnsNotFoundError(t *testing.T) {
 	registry, err := NewRegistry()
 	if err != nil {

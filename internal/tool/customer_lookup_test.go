@@ -55,6 +55,19 @@ func TestCustomerLookupRejectsMalformedArguments(t *testing.T) {
 	}
 }
 
+func TestCustomerLookupRejectsMissingCustomerID(t *testing.T) {
+	lookup := NewCustomerLookup()
+
+	_, err := lookup.Execute(context.Background(), Call{
+		Name:      "lookup_customer",
+		Arguments: json.RawMessage(`{}`),
+	})
+
+	if !errors.Is(err, ErrInvalidArguments) {
+		t.Errorf("Execute() error = %v, want ErrInvalidArguments", err)
+	}
+}
+
 func TestCustomerLookupReturnsNotFoundError(t *testing.T) {
 	lookup := NewCustomerLookup()
 

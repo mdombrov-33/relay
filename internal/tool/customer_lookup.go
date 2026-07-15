@@ -54,12 +54,15 @@ func (t *CustomerLookup) Execute(ctx context.Context, call Call) (Output, error)
 
 	var arguments lookupCustomerArgs
 	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
-		return Output{}, fmt.Errorf("%w: %v", ErrInvalidArguments, err)
+		return Output{}, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	}
+	if arguments.CustomerID == "" {
+		return Output{}, fmt.Errorf("%w: customer_id is required", ErrInvalidArguments)
 	}
 
 	customer, exists := t.customers[arguments.CustomerID]
 	if !exists {
-		return Output{}, fmt.Errorf("%w: %s", ErrCustomerNotFound, arguments.CustomerID)
+		return Output{}, fmt.Errorf("%w: %q", ErrCustomerNotFound, arguments.CustomerID)
 	}
 
 	content, err := json.Marshal(customer)
