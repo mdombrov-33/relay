@@ -64,7 +64,7 @@ internal/tool/      tool contract, registry, and deterministic lookup tools
 internal/workflow/  orchestration of a run through the model boundary
 ```
 
-The current engine executes an in-memory bounded model/tool loop. It starts the run, requires a positive `MaxSteps` limit, checks cancellation before each model turn, calls `model.Client.Next`, executes returned tool calls through the registry, and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausting the model-turn limit produces a typed failed run. Progress remains in memory and is not yet durable.
+The current engine executes an in-memory bounded model/tool loop. It starts the run, requires positive `MaxSteps`, `ModelTimeout`, and `ToolTimeout` limits, checks cancellation before each model turn, and derives a deadline-bound child context for every model or tool call. It executes returned tool calls through the registry and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausted step limits and expired call deadlines produce typed failed runs. Progress remains in memory and is not yet durable.
 
 The existing boundaries already establish several important contracts:
 

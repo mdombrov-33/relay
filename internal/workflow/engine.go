@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mdombrov-33/relay/internal/model"
 	"github.com/mdombrov-33/relay/internal/run"
@@ -11,20 +12,32 @@ import (
 )
 
 var (
-	ErrInvalidMaxSteps    = errors.New("max steps must be positive")
-	ErrStepLimitExceeded  = errors.New("workflow step limit exceeded")
-	ErrToolsNotConfigured = errors.New("tools not configured")
+	ErrInvalidMaxSteps     = errors.New("max steps must be positive")
+	ErrStepLimitExceeded   = errors.New("workflow step limit exceeded")
+	ErrToolsNotConfigured  = errors.New("tools not configured")
+	ErrInvalidModelTimeout = errors.New("model timeout must be positive")
+	ErrInvalidToolTimeout  = errors.New("tool timeout must be positive")
 )
 
 type Engine struct {
-	Client   model.Client
-	Tools    *tool.Registry
-	MaxSteps int
+	Client       model.Client
+	Tools        *tool.Registry
+	MaxSteps     int
+	ModelTimeout time.Duration
+	ToolTimeout  time.Duration
 }
 
 func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) (model.Response, error) {
 	if e.MaxSteps <= 0 {
 		return model.Response{}, fmt.Errorf("execute workflow: %w", ErrInvalidMaxSteps)
+	}
+
+	if e.ModelTimeout <= 0 {
+		return model.Response{}, fmt.Errorf("execute workflow: %w", ErrInvalidModelTimeout)
+	}
+
+	if e.ToolTimeout <= 0 {
+		return model.Response{}, fmt.Errorf("execute workflow: %w", ErrInvalidToolTimeout)
 	}
 
 	if err := r.Start(); err != nil {
@@ -42,7 +55,10 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			return model.Response{}, fmt.Errorf("execute workflow: %w", err)
 		}
 
-		response, err := e.Client.Next(ctx, request)
+		modelCtx, cancel := context.WithTimeout(ctx, e.ModelTimeout)
+		response, err := e.Client.Next(modelCtx, request)
+		cancel()
+
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				if cancelErr := r.Cancel(); cancelErr != nil {
@@ -87,7 +103,10 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 				return model.Response{}, fmt.Errorf("lookup tool %q: %w", call.Name, err)
 			}
 
-			output, err := executable.Execute(ctx, call)
+			toolCtx, cancel := context.WithTimeout(ctx, e.ToolTimeout)
+			output, err := executable.Execute(toolCtx, call)
+			cancel()
+
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					if cancelErr := r.Cancel(); cancelErr != nil {

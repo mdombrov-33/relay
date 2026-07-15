@@ -5,11 +5,37 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/mdombrov-33/relay/internal/model"
 	"github.com/mdombrov-33/relay/internal/run"
 	"github.com/mdombrov-33/relay/internal/tool"
 )
+
+type blockingClient struct{}
+
+var _ model.Client = blockingClient{}
+
+func (blockingClient) Next(ctx context.Context, _ model.Request) (model.Response, error) {
+	<-ctx.Done()
+	return model.Response{}, ctx.Err()
+}
+
+type blockingTool struct {
+	spec tool.Spec
+}
+
+var _ tool.Tool = blockingTool{}
+
+func (t blockingTool) Spec() tool.Spec {
+	return t.spec
+}
+
+func (blockingTool) Execute(ctx context.Context, _ tool.Call) (tool.Output, error) {
+	<-ctx.Done()
+	return tool.Output{}, ctx.Err()
+}
 
 func TestEngineExecute(t *testing.T) {
 	t.Run("returns the model response and succeeds the run", func(t *testing.T) {
@@ -18,7 +44,9 @@ func TestEngineExecute(t *testing.T) {
 			Client: model.NewScriptedClient(
 				model.Response{Text: "Hello from Relay"},
 			),
-			MaxSteps: 1,
+			MaxSteps:     1,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
 		}
 
 		got, err := engine.Execute(
@@ -46,8 +74,10 @@ func TestEngineExecute(t *testing.T) {
 	t.Run("marks the run failed when the model fails", func(t *testing.T) {
 		r := run.New("run-123")
 		engine := Engine{
-			Client:   model.NewScriptedClient(),
-			MaxSteps: 1,
+			Client:       model.NewScriptedClient(),
+			MaxSteps:     1,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
 		}
 
 		_, err := engine.Execute(context.Background(), &r, model.Request{})
@@ -63,8 +93,10 @@ func TestEngineExecute(t *testing.T) {
 	t.Run("cancels the run when the context is canceled", func(t *testing.T) {
 		r := run.New("run-123")
 		engine := Engine{
-			Client:   model.NewScriptedClient(),
-			MaxSteps: 1,
+			Client:       model.NewScriptedClient(),
+			MaxSteps:     1,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -107,9 +139,11 @@ func TestEngineExecute(t *testing.T) {
 
 		r := run.New("run-123")
 		engine := Engine{
-			Client:   client,
-			Tools:    registry,
-			MaxSteps: 2,
+			Client:       client,
+			Tools:        registry,
+			MaxSteps:     2,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
 		}
 
 		response, err := engine.Execute(context.Background(), &r, model.Request{
@@ -195,9 +229,11 @@ func TestEngineExecute(t *testing.T) {
 
 		r := run.New("run-123")
 		engine := Engine{
-			Client:   client,
-			Tools:    registry,
-			MaxSteps: 1,
+			Client:       client,
+			Tools:        registry,
+			MaxSteps:     1,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
 		}
 
 		_, err = engine.Execute(context.Background(), &r, model.Request{})
@@ -256,9 +292,11 @@ func TestEngineExecute(t *testing.T) {
 
 		r := run.New("run-123")
 		engine := Engine{
-			Client:   client,
-			Tools:    registry,
-			MaxSteps: 3,
+			Client:       client,
+			Tools:        registry,
+			MaxSteps:     3,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
 		}
 
 		response, err := engine.Execute(context.Background(), &r, model.Request{
@@ -314,5 +352,74 @@ func TestEngineExecute(t *testing.T) {
 		if incident.ID != "inc_123" {
 			t.Errorf("incident result ID = %q, want %q", incident.ID, "inc_123")
 		}
+	})
+
+	t.Run("fails the run when a model call times out", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			r := run.New("run-123")
+			engine := Engine{
+				Client:       blockingClient{},
+				MaxSteps:     1,
+				ModelTimeout: time.Second,
+				ToolTimeout:  time.Second,
+			}
+
+			_, err := engine.Execute(t.Context(), &r, model.Request{})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Execute() error = %v, want context.DeadlineExceeded", err)
+			}
+
+			if r.Status != run.StatusFailed {
+				t.Errorf("run status = %q, want %q", r.Status, run.StatusFailed)
+			}
+		})
+	})
+
+	t.Run("fails the run when a tool call times out", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			blocking := blockingTool{
+				spec: tool.Spec{
+					Name:        "blocking_tool",
+					Description: "Blocks until its context ends",
+				},
+			}
+
+			registry, err := tool.NewRegistry(blocking)
+			if err != nil {
+				t.Fatalf("NewRegistry() error = %v", err)
+			}
+
+			client := model.NewScriptedClient(model.Response{
+				ToolCalls: []tool.Call{
+					{
+						ID:        "call_123",
+						Name:      "blocking_tool",
+						Arguments: json.RawMessage(`{}`),
+					},
+				},
+			})
+
+			r := run.New("run-123")
+			engine := Engine{
+				Client:       client,
+				Tools:        registry,
+				MaxSteps:     1,
+				ModelTimeout: time.Second,
+				ToolTimeout:  time.Second,
+			}
+
+			_, err = engine.Execute(t.Context(), &r, model.Request{})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Execute() error = %v, want context.DeadlineExceeded", err)
+			}
+
+			if r.Status != run.StatusFailed {
+				t.Errorf("run status = %q, want %q", r.Status, run.StatusFailed)
+			}
+
+			if len(client.Requests()) != 1 {
+				t.Errorf("recorded requests = %d, want 1", len(client.Requests()))
+			}
+		})
 	})
 }
