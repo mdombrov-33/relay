@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/mdombrov-33/relay/internal/event"
@@ -54,9 +55,10 @@ func main() {
 		model.Response{Text: "Ada's resolved service outage is eligible for review."},
 	)
 
+	events := &event.Log{}
 	engine := workflow.Engine{
 		Client:       client,
-		Events:       &event.Log{},
+		Events:       events,
 		Tools:        tools,
 		MaxSteps:     3,
 		ModelTimeout: time.Second,
@@ -78,4 +80,23 @@ func main() {
 	}
 
 	fmt.Println(response.Text)
+	fmt.Print(formatTimeline(events.Events()))
+}
+
+func formatTimeline(events []event.Envelope) string {
+	var timeline strings.Builder
+	timeline.WriteString("Event timeline:\n")
+
+	for _, event := range events {
+		timeline.WriteString(event.OccurredAt().Format(time.RFC3339))
+		timeline.WriteByte(' ')
+		timeline.WriteString(event.ID())
+		timeline.WriteByte(' ')
+		timeline.WriteString(string(event.Type()))
+		timeline.WriteByte(' ')
+		timeline.Write(event.Payload())
+		timeline.WriteByte('\n')
+	}
+
+	return timeline.String()
 }
