@@ -3,11 +3,17 @@ package event
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/mdombrov-33/relay/internal/run"
 )
+
+// MaxPayloadBytes limits the encoded payload of a newly emitted event.
+const MaxPayloadBytes = 8 << 10
+
+var ErrPayloadTooLarge = errors.New("event payload exceeds maximum size")
 
 type Type string
 
@@ -28,20 +34,28 @@ const (
 	TypeToolDenied        Type = "tool.denied.v1"
 )
 
+// Payload identifies a safe payload type permitted in newly emitted events.
+//
+// The sealed interface makes redaction a construction-time policy: event
+// payloads contain only display-safe metadata, never prompts, model text, tool
+// arguments, tool results, errors, or credentials.
 type Payload interface {
 	isPayload()
 }
 
+// LifecyclePayload records only a run's current status.
 type LifecyclePayload struct {
 	Status run.Status `json:"status"`
 }
 
 func (LifecyclePayload) isPayload() {}
 
+// ModelPayload intentionally records no model input or output.
 type ModelPayload struct{}
 
 func (ModelPayload) isPayload() {}
 
+// ToolPayload identifies a tool call without retaining its input or output.
 type ToolPayload struct {
 	CallID   string `json:"callId"`
 	ToolName string `json:"toolName"`
@@ -76,6 +90,9 @@ func New(id string, runID run.ID, stepKey run.StepKey, typ Type, occurredAt time
 	encodedPayload, err := json.Marshal(payload)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("marshal event payload: %w", err)
+	}
+	if len(encodedPayload) > MaxPayloadBytes {
+		return Envelope{}, fmt.Errorf("%w: %d bytes exceeds %d", ErrPayloadTooLarge, len(encodedPayload), MaxPayloadBytes)
 	}
 
 	return Envelope{
