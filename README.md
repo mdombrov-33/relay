@@ -6,7 +6,23 @@ The project uses a synthetic support-credit workflow to demonstrate event histor
 
 ## Status
 
-Early development. The first milestone establishes the project contract and repository foundation.
+Milestone 2 is complete: the deterministic in-memory workflow emits a typed,
+append-only event timeline. Milestone 3 is adding PostgreSQL persistence.
+
+## Local PostgreSQL
+
+The development database is PostgreSQL 18 in Docker Compose. Start it and
+apply the Goose migrations with:
+
+```sh
+make db-up
+make migrate-up
+```
+
+The local connection URL is
+`postgres://relay:relay@localhost:5433/relay?sslmode=disable`.
+Use `make db-logs` to follow PostgreSQL logs, `make db-shell` to inspect the
+database, and `make db-reset` to recreate the disposable local database.
 
 ## Project notes
 

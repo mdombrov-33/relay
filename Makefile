@@ -1,7 +1,12 @@
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
+GOOSE ?= goose
+COMPOSE ?= docker compose
+DB_SERVICE ?= db
+MIGRATIONS_DIR := migrations
+DATABASE_URL ?= postgres://relay:relay@localhost:5433/relay?sslmode=disable
 
-.PHONY: check fmt lint test test-race
+.PHONY: check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate test test-race
 
 check: test test-race lint
 
@@ -16,3 +21,31 @@ test:
 
 test-race:
 	$(GO) test -race ./...
+
+db-up:
+	$(COMPOSE) up -d --wait $(DB_SERVICE)
+
+db-down:
+	$(COMPOSE) down
+
+db-logs:
+	$(COMPOSE) logs --follow $(DB_SERVICE)
+
+db-shell:
+	$(COMPOSE) exec $(DB_SERVICE) psql -U relay -d relay
+
+db-reset:
+	$(COMPOSE) down --volumes
+	$(MAKE) db-up
+
+migrate-validate:
+	$(GOOSE) -dir $(MIGRATIONS_DIR) validate
+
+migrate-status:
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(DATABASE_URL)" status
+
+migrate-up:
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(DATABASE_URL)" up
+
+migrate-down:
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(DATABASE_URL)" down
