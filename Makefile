@@ -6,7 +6,7 @@ DB_SERVICE ?= db
 MIGRATIONS_DIR := migrations
 DATABASE_URL ?= postgres://relay:relay@localhost:5433/relay?sslmode=disable
 
-.PHONY: check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate test test-race
+.PHONY: check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate test test-integration test-race
 
 check: test test-race lint
 
@@ -22,11 +22,14 @@ test:
 test-race:
 	$(GO) test -race ./...
 
+test-integration:
+	DATABASE_URL="$(DATABASE_URL)" $(GO) test -tags=integration ./internal/postgres
+
 db-up:
-	$(COMPOSE) up -d --wait $(DB_SERVICE)
+	$(COMPOSE) up -d --wait --remove-orphans $(DB_SERVICE)
 
 db-down:
-	$(COMPOSE) down
+	$(COMPOSE) down --remove-orphans
 
 db-logs:
 	$(COMPOSE) logs --follow $(DB_SERVICE)
@@ -35,7 +38,7 @@ db-shell:
 	$(COMPOSE) exec $(DB_SERVICE) psql -U relay -d relay
 
 db-reset:
-	$(COMPOSE) down --volumes
+	$(COMPOSE) down --volumes --remove-orphans
 	$(MAKE) db-up
 
 migrate-validate:

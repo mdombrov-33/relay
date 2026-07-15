@@ -31,4 +31,6 @@ them in its `goose_db_version` table. Future capabilities belong in new
 migrations; never rewrite an applied migration.
 
 `000001_create_runs_and_events` establishes the current run projection and
-append-only event history.
+append-only event history. After starting the database and applying migrations,
+`make test-integration` verifies the Go pool can connect and that the `runs`
+and `events` tables exist.

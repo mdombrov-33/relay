@@ -17,6 +17,7 @@ apply the Goose migrations with:
 ```sh
 make db-up
 make migrate-up
+make test-integration
 ```
 
 The local connection URL is
