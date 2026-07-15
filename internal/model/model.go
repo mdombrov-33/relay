@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/mdombrov-33/relay/internal/tool"
@@ -20,6 +21,7 @@ type Message struct {
 	Content    string
 	ToolCallID string
 	ToolName   string
+	ToolCalls  []tool.Call
 }
 
 type Request struct {
@@ -30,6 +32,14 @@ type Request struct {
 type Response struct {
 	Text      string
 	ToolCalls []tool.Call
+}
+
+func NewAssistantMessage(response Response) Message {
+	return Message{
+		Role:      RoleAssistant,
+		Content:   response.Text,
+		ToolCalls: cloneToolCalls(response.ToolCalls),
+	}
 }
 
 func NewToolMessage(result tool.Result) Message {
@@ -43,4 +53,18 @@ func NewToolMessage(result tool.Result) Message {
 
 type Client interface {
 	Next(ctx context.Context, request Request) (Response, error)
+}
+
+func cloneToolCalls(calls []tool.Call) []tool.Call {
+	if calls == nil {
+		return nil
+	}
+
+	cloned := make([]tool.Call, len(calls))
+	for i, call := range calls {
+		cloned[i] = call
+		cloned[i].Arguments = bytes.Clone(call.Arguments)
+	}
+
+	return cloned
 }
