@@ -15,6 +15,7 @@ func TestNew(t *testing.T) {
 	event, err := event.New(
 		"event-123",
 		run.ID("run-123"),
+		run.StepKey("tool/1/call-123"),
 		event.TypeToolCompleted,
 		occurredAt,
 		event.ToolPayload{
@@ -31,7 +32,7 @@ func TestNew(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 
-	const expected = `{"id":"event-123","runId":"run-123","type":"tool.completed.v1","occurredAt":"2026-07-15T12:34:56Z","payload":{"callId":"call-123","toolName":"lookup_customer"}}`
+	const expected = `{"id":"event-123","runId":"run-123","type":"tool.completed.v1","occurredAt":"2026-07-15T12:34:56Z","stepKey":"tool/1/call-123","payload":{"callId":"call-123","toolName":"lookup_customer"}}`
 	if string(encoded) != expected {
 		t.Fatalf("json.Marshal() = %s, want %s", encoded, expected)
 	}
@@ -72,6 +73,7 @@ func TestNewEncodesTypedPayloads(t *testing.T) {
 			envelope, err := event.New(
 				"event-123",
 				run.ID("run-123"),
+				run.StepKey("workflow"),
 				test.typ,
 				time.Date(2026, time.July, 15, 12, 34, 56, 0, time.UTC),
 				test.payload,
@@ -91,6 +93,7 @@ func TestEnvelopePayloadReturnsCopy(t *testing.T) {
 	event, err := event.New(
 		"event-123",
 		run.ID("run-123"),
+		run.StepKey("model/1"),
 		event.TypeModelCompleted,
 		time.Date(2026, time.July, 15, 12, 34, 56, 0, time.UTC),
 		event.ModelPayload{},
@@ -108,7 +111,7 @@ func TestEnvelopePayloadReturnsCopy(t *testing.T) {
 }
 
 func TestEnvelopeUnmarshalJSONPreservesUnknownType(t *testing.T) {
-	const encoded = `{"id":"event-123","runId":"run-123","type":"future.event.v2","occurredAt":"2026-07-15T12:34:56Z","payload":{"futureField":"value"}}`
+	const encoded = `{"id":"event-123","runId":"run-123","type":"future.event.v2","occurredAt":"2026-07-15T12:34:56Z","stepKey":"future/1","payload":{"futureField":"value"}}`
 
 	var envelope event.Envelope
 	if err := json.Unmarshal([]byte(encoded), &envelope); err != nil {
@@ -120,6 +123,9 @@ func TestEnvelopeUnmarshalJSONPreservesUnknownType(t *testing.T) {
 	}
 	if got := envelope.RunID(); got != run.ID("run-123") {
 		t.Errorf("RunID() = %q, want %q", got, run.ID("run-123"))
+	}
+	if got := envelope.StepKey(); got != run.StepKey("future/1") {
+		t.Errorf("StepKey() = %q, want %q", got, run.StepKey("future/1"))
 	}
 	if got := envelope.Type(); got != event.Type("future.event.v2") {
 		t.Errorf("Type() = %q, want %q", got, event.Type("future.event.v2"))

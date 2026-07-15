@@ -11,6 +11,9 @@ var (
 
 type ID string
 
+// StepKey identifies one logical workflow operation within a run.
+type StepKey string
+
 type Run struct {
 	ID     ID
 	Status Status

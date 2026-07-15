@@ -12,6 +12,7 @@ func TestLogRecord(t *testing.T) {
 
 	first, err := log.Record(
 		run.ID("run-123"),
+		run.StepKey("workflow"),
 		event.TypeWorkflowStarted,
 		event.LifecyclePayload{Status: run.StatusRunning},
 	)
@@ -21,6 +22,7 @@ func TestLogRecord(t *testing.T) {
 
 	second, err := log.Record(
 		run.ID("run-123"),
+		run.StepKey("model/1"),
 		event.TypeModelRequested,
 		event.ModelPayload{},
 	)
@@ -47,6 +49,9 @@ func TestLogRecord(t *testing.T) {
 	}
 	if got := events[1].Type(); got != event.TypeModelRequested {
 		t.Errorf("second event type = %q, want %q", got, event.TypeModelRequested)
+	}
+	if got := events[1].StepKey(); got != run.StepKey("model/1") {
+		t.Errorf("second event step key = %q, want %q", got, run.StepKey("model/1"))
 	}
 
 	events[0] = event.Envelope{}

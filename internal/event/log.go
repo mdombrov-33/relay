@@ -14,12 +14,12 @@ type Log struct {
 	events []Envelope
 }
 
-func (l *Log) Record(runID run.ID, typ Type, payload Payload) (Envelope, error) {
+func (l *Log) Record(runID run.ID, stepKey run.StepKey, typ Type, payload Payload) (Envelope, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	eventID := fmt.Sprintf("event-%d", l.nextID+1)
-	envelope, err := New(eventID, runID, typ, time.Now().UTC(), payload)
+	envelope, err := New(eventID, runID, stepKey, typ, time.Now().UTC(), payload)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("create event envelope: %w", err)
 	}

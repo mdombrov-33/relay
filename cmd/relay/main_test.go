@@ -12,6 +12,7 @@ func TestFormatTimeline(t *testing.T) {
 	started, err := event.New(
 		"event-1",
 		run.ID("run-123"),
+		run.StepKey("workflow"),
 		event.TypeWorkflowStarted,
 		time.Date(2026, time.July, 15, 12, 34, 56, 0, time.UTC),
 		event.LifecyclePayload{Status: run.StatusRunning},
@@ -23,6 +24,7 @@ func TestFormatTimeline(t *testing.T) {
 	requested, err := event.New(
 		"event-2",
 		run.ID("run-123"),
+		run.StepKey("tool/1/call-123"),
 		event.TypeToolRequested,
 		time.Date(2026, time.July, 15, 12, 34, 57, 0, time.UTC),
 		event.ToolPayload{CallID: "call-123", ToolName: "lookup_customer"},
@@ -32,8 +34,8 @@ func TestFormatTimeline(t *testing.T) {
 	}
 
 	const expected = "Event timeline:\n" +
-		"2026-07-15T12:34:56Z event-1 workflow.started.v1 {\"status\":\"running\"}\n" +
-		"2026-07-15T12:34:57Z event-2 tool.requested.v1 {\"callId\":\"call-123\",\"toolName\":\"lookup_customer\"}\n"
+		"2026-07-15T12:34:56Z event-1 run=run-123 step=workflow workflow.started.v1 {\"status\":\"running\"}\n" +
+		"2026-07-15T12:34:57Z event-2 run=run-123 step=tool/1/call-123 tool.requested.v1 {\"callId\":\"call-123\",\"toolName\":\"lookup_customer\"}\n"
 
 	if got := formatTimeline([]event.Envelope{started, requested}); got != expected {
 		t.Errorf("formatTimeline() =\n%s\nwant:\n%s", got, expected)

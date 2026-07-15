@@ -21,6 +21,8 @@ var (
 	ErrEventsNotConfigured = errors.New("event log not configured")
 )
 
+const workflowStepKey run.StepKey = "workflow"
+
 type Engine struct {
 	Client       model.Client
 	Events       *event.Log
@@ -49,7 +51,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	if err := r.Start(); err != nil {
 		return model.Response{}, fmt.Errorf("start run: %w", err)
 	}
-	if err := e.record(r, event.TypeWorkflowStarted, event.LifecyclePayload{Status: r.Status}); err != nil {
+	if err := e.record(r, workflowStepKey, event.TypeWorkflowStarted, event.LifecyclePayload{Status: r.Status}); err != nil {
 		return model.Response{}, err
 	}
 
@@ -60,14 +62,15 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			if cancelErr := r.Cancel(); cancelErr != nil {
 				return model.Response{}, fmt.Errorf("cancel run before model call: %w", cancelErr)
 			}
-			if recordErr := e.record(r, event.TypeWorkflowCancelled, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+			if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowCancelled, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
 				return model.Response{}, recordErr
 			}
 
 			return model.Response{}, fmt.Errorf("execute workflow: %w", err)
 		}
 
-		if err := e.record(r, event.TypeModelRequested, event.ModelPayload{}); err != nil {
+		modelStepKey := run.StepKey(fmt.Sprintf("model/%d", step+1))
+		if err := e.record(r, modelStepKey, event.TypeModelRequested, event.ModelPayload{}); err != nil {
 			return model.Response{}, err
 		}
 
@@ -76,7 +79,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 		cancel()
 
 		if err != nil {
-			if recordErr := e.record(r, event.TypeModelFailed, event.ModelPayload{}); recordErr != nil {
+			if recordErr := e.record(r, modelStepKey, event.TypeModelFailed, event.ModelPayload{}); recordErr != nil {
 				return model.Response{}, recordErr
 			}
 
@@ -84,7 +87,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 				if cancelErr := r.Cancel(); cancelErr != nil {
 					return model.Response{}, fmt.Errorf("cancel run after model cancellation: %w", cancelErr)
 				}
-				if recordErr := e.record(r, event.TypeWorkflowCancelled, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+				if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowCancelled, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
 					return model.Response{}, recordErr
 				}
 
@@ -94,13 +97,13 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			if failErr := r.Fail(); failErr != nil {
 				return model.Response{}, fmt.Errorf("fail run after model error: %w", failErr)
 			}
-			if recordErr := e.record(r, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+			if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
 				return model.Response{}, recordErr
 			}
 
 			return model.Response{}, fmt.Errorf("get next model response: %w", err)
 		}
-		if err := e.record(r, event.TypeModelCompleted, event.ModelPayload{}); err != nil {
+		if err := e.record(r, modelStepKey, event.TypeModelCompleted, event.ModelPayload{}); err != nil {
 			return model.Response{}, err
 		}
 
@@ -110,7 +113,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			if err := r.Succeed(); err != nil {
 				return model.Response{}, fmt.Errorf("succeed run: %w", err)
 			}
-			if err := e.record(r, event.TypeWorkflowCompleted, event.LifecyclePayload{Status: r.Status}); err != nil {
+			if err := e.record(r, workflowStepKey, event.TypeWorkflowCompleted, event.LifecyclePayload{Status: r.Status}); err != nil {
 				return model.Response{}, err
 			}
 
@@ -121,7 +124,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			if err := r.Fail(); err != nil {
 				return model.Response{}, fmt.Errorf("fail run without tools: %w", err)
 			}
-			if err := e.record(r, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); err != nil {
+			if err := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); err != nil {
 				return model.Response{}, err
 			}
 
@@ -129,20 +132,21 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 		}
 
 		for _, call := range response.ToolCalls {
+			toolStepKey := run.StepKey(fmt.Sprintf("tool/%d/%s", step+1, call.ID))
 			payload := event.ToolPayload{CallID: call.ID, ToolName: call.Name}
-			if err := e.record(r, event.TypeToolRequested, payload); err != nil {
+			if err := e.record(r, toolStepKey, event.TypeToolRequested, payload); err != nil {
 				return model.Response{}, err
 			}
 
 			executable, err := e.Tools.Lookup(call.Name)
 			if err != nil {
-				if recordErr := e.record(r, event.TypeToolFailed, payload); recordErr != nil {
+				if recordErr := e.record(r, toolStepKey, event.TypeToolFailed, payload); recordErr != nil {
 					return model.Response{}, recordErr
 				}
 				if failErr := r.Fail(); failErr != nil {
 					return model.Response{}, fmt.Errorf("fail run after tool lookup error: %w", failErr)
 				}
-				if recordErr := e.record(r, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+				if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
 					return model.Response{}, recordErr
 				}
 
@@ -154,14 +158,14 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			cancel()
 
 			if err != nil {
-				if recordErr := e.record(r, event.TypeToolFailed, payload); recordErr != nil {
+				if recordErr := e.record(r, toolStepKey, event.TypeToolFailed, payload); recordErr != nil {
 					return model.Response{}, recordErr
 				}
 				if errors.Is(err, context.Canceled) {
 					if cancelErr := r.Cancel(); cancelErr != nil {
 						return model.Response{}, fmt.Errorf("cancel run after tool cancellation: %w", cancelErr)
 					}
-					if recordErr := e.record(r, event.TypeWorkflowCancelled, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+					if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowCancelled, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
 						return model.Response{}, recordErr
 					}
 
@@ -171,13 +175,13 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 				if failErr := r.Fail(); failErr != nil {
 					return model.Response{}, fmt.Errorf("fail run after tool error: %w", failErr)
 				}
-				if recordErr := e.record(r, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+				if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
 					return model.Response{}, recordErr
 				}
 
 				return model.Response{}, fmt.Errorf("execute tool %q: %w", call.Name, err)
 			}
-			if err := e.record(r, event.TypeToolCompleted, payload); err != nil {
+			if err := e.record(r, toolStepKey, event.TypeToolCompleted, payload); err != nil {
 				return model.Response{}, err
 			}
 
@@ -192,15 +196,15 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	if err := r.Fail(); err != nil {
 		return model.Response{}, fmt.Errorf("fail run after step limit: %w", err)
 	}
-	if err := e.record(r, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); err != nil {
+	if err := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); err != nil {
 		return model.Response{}, err
 	}
 
 	return model.Response{}, fmt.Errorf("execute workflow: %w", ErrStepLimitExceeded)
 }
 
-func (e Engine) record(r *run.Run, typ event.Type, payload event.Payload) error {
-	if _, err := e.Events.Record(r.ID, typ, payload); err != nil {
+func (e Engine) record(r *run.Run, stepKey run.StepKey, typ event.Type, payload event.Payload) error {
+	if _, err := e.Events.Record(r.ID, stepKey, typ, payload); err != nil {
 		return fmt.Errorf("record event %q: %w", typ, err)
 	}
 

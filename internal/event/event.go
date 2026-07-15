@@ -52,6 +52,7 @@ func (ToolPayload) isPayload() {}
 type Envelope struct {
 	id         string
 	runID      run.ID
+	stepKey    run.StepKey
 	typ        Type
 	occurredAt time.Time
 	payload    json.RawMessage
@@ -62,6 +63,7 @@ type envelopeJSON struct {
 	RunID      run.ID          `json:"runId"`
 	Type       Type            `json:"type"`
 	OccurredAt time.Time       `json:"occurredAt"`
+	StepKey    run.StepKey     `json:"stepKey"`
 	Payload    json.RawMessage `json:"payload"`
 }
 
@@ -70,7 +72,7 @@ var (
 	_ json.Unmarshaler = (*Envelope)(nil)
 )
 
-func New(id string, runID run.ID, typ Type, occurredAt time.Time, payload Payload) (Envelope, error) {
+func New(id string, runID run.ID, stepKey run.StepKey, typ Type, occurredAt time.Time, payload Payload) (Envelope, error) {
 	encodedPayload, err := json.Marshal(payload)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("marshal event payload: %w", err)
@@ -79,6 +81,7 @@ func New(id string, runID run.ID, typ Type, occurredAt time.Time, payload Payloa
 	return Envelope{
 		id:         id,
 		runID:      runID,
+		stepKey:    stepKey,
 		typ:        typ,
 		occurredAt: occurredAt,
 		payload:    encodedPayload,
@@ -91,6 +94,10 @@ func (e Envelope) ID() string {
 
 func (e Envelope) RunID() run.ID {
 	return e.runID
+}
+
+func (e Envelope) StepKey() run.StepKey {
+	return e.stepKey
 }
 
 func (e Envelope) Type() Type {
@@ -111,6 +118,7 @@ func (e Envelope) MarshalJSON() ([]byte, error) {
 		RunID:      e.runID,
 		Type:       e.typ,
 		OccurredAt: e.occurredAt,
+		StepKey:    e.stepKey,
 		Payload:    e.payload,
 	})
 }
@@ -123,6 +131,7 @@ func (e *Envelope) UnmarshalJSON(data []byte) error {
 
 	e.id = decoded.ID
 	e.runID = decoded.RunID
+	e.stepKey = decoded.StepKey
 	e.typ = decoded.Type
 	e.occurredAt = decoded.OccurredAt
 	e.payload = bytes.Clone(decoded.Payload)

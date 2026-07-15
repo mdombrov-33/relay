@@ -439,6 +439,20 @@ func TestEngineExecute(t *testing.T) {
 			event.TypeModelCompleted,
 			event.TypeWorkflowCompleted,
 		)
+		assertEventCorrelation(t, events.Events(), r.ID,
+			run.StepKey("workflow"),
+			run.StepKey("model/1"),
+			run.StepKey("model/1"),
+			run.StepKey("tool/1/call_customer"),
+			run.StepKey("tool/1/call_customer"),
+			run.StepKey("model/2"),
+			run.StepKey("model/2"),
+			run.StepKey("tool/2/call_incident"),
+			run.StepKey("tool/2/call_incident"),
+			run.StepKey("model/3"),
+			run.StepKey("model/3"),
+			run.StepKey("workflow"),
+		)
 	})
 
 	t.Run("fails the run when a model call times out", func(t *testing.T) {
@@ -631,6 +645,23 @@ func assertEventTypes(t *testing.T, events []event.Envelope, expected ...event.T
 	for i, expectedType := range expected {
 		if got := events[i].Type(); got != expectedType {
 			t.Errorf("event %d type = %q, want %q", i, got, expectedType)
+		}
+	}
+}
+
+func assertEventCorrelation(t *testing.T, events []event.Envelope, runID run.ID, expected ...run.StepKey) {
+	t.Helper()
+
+	if len(events) != len(expected) {
+		t.Fatalf("event count = %d, want %d", len(events), len(expected))
+	}
+
+	for i, expectedStepKey := range expected {
+		if got := events[i].RunID(); got != runID {
+			t.Errorf("event %d run ID = %q, want %q", i, got, runID)
+		}
+		if got := events[i].StepKey(); got != expectedStepKey {
+			t.Errorf("event %d step key = %q, want %q", i, got, expectedStepKey)
 		}
 	}
 }
