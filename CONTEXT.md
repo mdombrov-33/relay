@@ -59,12 +59,13 @@ The project does not claim to be a general Temporal replacement, a hardened mult
 ```text
 cmd/relay/          deterministic in-memory workflow demo
 internal/run/       run identity, status, and guarded lifecycle transitions
+internal/event/     immutable event envelope, typed payloads, and JSON contract
 internal/model/     provider-independent messages, client port, and scripted fake
 internal/tool/      tool contract, registry, and deterministic lookup tools
 internal/workflow/  orchestration of a run through the model boundary
 ```
 
-The current engine executes an in-memory bounded model/tool loop. It starts the run, requires positive `MaxSteps`, `ModelTimeout`, and `ToolTimeout` limits, checks cancellation before each model turn, and derives a deadline-bound child context for every model or tool call. It executes returned tool calls through the registry and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausted step limits and expired call deadlines produce typed failed runs. `go run ./cmd/relay` wires the scripted client, two deterministic lookup tools, registry, and engine into a runnable three-turn demo. Progress remains in memory: a fresh engine with the same run ID begins pending and repeats the three model turns, as the restart-loss test demonstrates.
+The current engine executes an in-memory bounded model/tool loop. It starts the run, requires positive `MaxSteps`, `ModelTimeout`, and `ToolTimeout` limits, checks cancellation before each model turn, and derives a deadline-bound child context for every model or tool call. It executes returned tool calls through the registry and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausted step limits and expired call deadlines produce typed failed runs. `go run ./cmd/relay` wires the scripted client, two deterministic lookup tools, registry, and engine into a runnable three-turn demo. Progress remains in memory: a fresh engine with the same run ID begins pending and repeats the three model turns, as the restart-loss test demonstrates. The `event` package now supplies an immutable JSON envelope with a run ID, versioned type, timestamp, and typed lifecycle/model/tool payloads; it is not emitted or stored yet.
 
 The existing boundaries already establish several important contracts:
 
@@ -75,6 +76,7 @@ The existing boundaries already establish several important contracts:
 - `model.Message` can represent system, user, assistant, and correlated tool-result messages.
 - `model.ScriptedClient` makes workflow behavior deterministic and records defensive copies of model requests for transcript assertions.
 - `run.Run` is the authority for legal lifecycle transitions.
+- `event.Envelope` serializes one immutable runtime fact; its raw payload bytes are defensively copied, and unknown future types remain inspectable as raw JSON.
 
 When orienting in the codebase, follow behavior through these contracts and their tests instead of inferring architecture from directory names alone.
 
