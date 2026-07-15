@@ -16,8 +16,10 @@ const (
 )
 
 type Message struct {
-	Role    Role
-	Content string
+	Role       Role
+	Content    string
+	ToolCallID string
+	ToolName   string
 }
 
 type Request struct {
@@ -28,6 +30,15 @@ type Request struct {
 type Response struct {
 	Text      string
 	ToolCalls []tool.Call
+}
+
+func NewToolMessage(result tool.Result) Message {
+	return Message{
+		Role:       RoleTool,
+		Content:    result.Content,
+		ToolCallID: result.CallID,
+		ToolName:   result.ToolName,
+	}
 }
 
 type Client interface {
