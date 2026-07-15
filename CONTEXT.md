@@ -60,7 +60,7 @@ The project does not claim to be a general Temporal replacement, a hardened mult
 cmd/relay/          executable entry point
 internal/run/       run identity, status, and guarded lifecycle transitions
 internal/model/     provider-independent messages, client port, and scripted fake
-internal/tool/      tool contract, registry, and deterministic lookup tool
+internal/tool/      tool contract, registry, and deterministic lookup tools
 internal/workflow/  orchestration of a run through the model boundary
 ```
 
@@ -71,6 +71,7 @@ The existing boundaries already establish several important contracts:
 - `model.Client` owns only the provider call. It does not control run state or execute tools.
 - `tool.Tool` exposes a specification and executes a typed call through `context.Context`.
 - `tool.Registry` validates registrations and resolves tools by the model-visible name.
+- `tool.CustomerLookup` and `tool.IncidentLookup` are safe deterministic read-only demo tools with typed argument and not-found failures.
 - `model.Message` can represent system, user, assistant, and correlated tool-result messages.
 - `model.ScriptedClient` makes workflow behavior deterministic and records defensive copies of model requests for transcript assertions.
 - `run.Run` is the authority for legal lifecycle transitions.

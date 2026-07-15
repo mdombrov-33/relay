@@ -213,4 +213,106 @@ func TestEngineExecute(t *testing.T) {
 			t.Errorf("recorded requests = %d, want 1", len(client.Requests()))
 		}
 	})
+
+	t.Run("executes sequential tool calls before the final response", func(t *testing.T) {
+		customerLookup := tool.NewCustomerLookup(tool.Customer{
+			ID:   "cust_123",
+			Name: "Ada Lovelace",
+			Plan: "pro",
+		})
+		incidentLookup := tool.NewIncidentLookup(tool.Incident{
+			ID:         "inc_123",
+			CustomerID: "cust_123",
+			Summary:    "Service outage",
+			Status:     "resolved",
+		})
+
+		registry, err := tool.NewRegistry(customerLookup, incidentLookup)
+		if err != nil {
+			t.Fatalf("NewRegistry() error = %v", err)
+		}
+
+		client := model.NewScriptedClient(
+			model.Response{
+				ToolCalls: []tool.Call{
+					{
+						ID:        "call_customer",
+						Name:      "lookup_customer",
+						Arguments: json.RawMessage(`{"customer_id":"cust_123"}`),
+					},
+				},
+			},
+			model.Response{
+				ToolCalls: []tool.Call{
+					{
+						ID:        "call_incident",
+						Name:      "lookup_incident",
+						Arguments: json.RawMessage(`{"incident_id":"inc_123"}`),
+					},
+				},
+			},
+			model.Response{Text: "Ada's resolved service outage is eligible for review."},
+		)
+
+		r := run.New("run-123")
+		engine := Engine{
+			Client:   client,
+			Tools:    registry,
+			MaxSteps: 3,
+		}
+
+		response, err := engine.Execute(context.Background(), &r, model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "Check customer cust_123 and incident inc_123."},
+			},
+			Tools: []tool.Spec{
+				customerLookup.Spec(),
+				incidentLookup.Spec(),
+			},
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+
+		if response.Text != "Ada's resolved service outage is eligible for review." {
+			t.Errorf("response text = %q, want final answer", response.Text)
+		}
+
+		if r.Status != run.StatusSucceeded {
+			t.Errorf("run status = %q, want %q", r.Status, run.StatusSucceeded)
+		}
+
+		requests := client.Requests()
+		if len(requests) != 3 {
+			t.Fatalf("recorded requests = %d, want 3", len(requests))
+		}
+
+		thirdRequest := requests[2]
+		if len(thirdRequest.Messages) != 5 {
+			t.Fatalf("third request messages = %d, want 5", len(thirdRequest.Messages))
+		}
+
+		if got := thirdRequest.Messages[3].ToolCalls[0].Name; got != "lookup_incident" {
+			t.Errorf("second assistant tool name = %q, want %q", got, "lookup_incident")
+		}
+
+		incidentMessage := thirdRequest.Messages[4]
+		if incidentMessage.Role != model.RoleTool {
+			t.Errorf("incident result role = %q, want %q", incidentMessage.Role, model.RoleTool)
+		}
+		if incidentMessage.ToolCallID != "call_incident" {
+			t.Errorf("incident result call ID = %q, want %q", incidentMessage.ToolCallID, "call_incident")
+		}
+		if incidentMessage.ToolName != "lookup_incident" {
+			t.Errorf("incident result name = %q, want %q", incidentMessage.ToolName, "lookup_incident")
+		}
+
+		var incident tool.Incident
+		if err := json.Unmarshal([]byte(incidentMessage.Content), &incident); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if incident.ID != "inc_123" {
+			t.Errorf("incident result ID = %q, want %q", incident.ID, "inc_123")
+		}
+	})
 }
