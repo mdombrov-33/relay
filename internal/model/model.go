@@ -2,7 +2,8 @@ package model
 
 import (
 	"context"
-	"encoding/json"
+
+	"github.com/mdombrov-33/relay/internal/tool"
 )
 
 type Role string
@@ -21,17 +22,12 @@ type Message struct {
 
 type Request struct {
 	Messages []Message
-}
-
-type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments json.RawMessage
+	Tools    []tool.Spec
 }
 
 type Response struct {
 	Text      string
-	ToolCalls []ToolCall
+	ToolCalls []tool.Call
 }
 
 type Client interface {
