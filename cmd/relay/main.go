@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"strings"
@@ -16,6 +17,20 @@ import (
 )
 
 func main() {
+	scenario := flag.String("scenario", "success", "demo scenario: success or failed")
+	flag.Parse()
+
+	switch *scenario {
+	case "success":
+		runSuccessfulDemo()
+	case "failed":
+		runFailedDemo()
+	default:
+		log.Fatalf("unknown demo scenario %q", *scenario)
+	}
+}
+
+func runSuccessfulDemo() {
 	customerLookup := tool.NewCustomerLookup(tool.Customer{
 		ID:   "cust_123",
 		Name: "Ada Lovelace",
@@ -80,6 +95,33 @@ func main() {
 	}
 
 	fmt.Println(response.Text)
+	fmt.Print(formatTimeline(events.Events()))
+}
+
+func runFailedDemo() {
+	events := &event.Log{}
+	engine := workflow.Engine{
+		Client:       model.NewScriptedClient(),
+		Events:       events,
+		MaxSteps:     1,
+		ModelTimeout: time.Second,
+		ToolTimeout:  time.Second,
+	}
+
+	r := run.New("demo-failed-001")
+	_, err := engine.Execute(context.Background(), &r, model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "Demonstrate a failed workflow."},
+		},
+	})
+	if err == nil {
+		log.Fatal("failed demo workflow unexpectedly succeeded")
+	}
+	if r.Status != run.StatusFailed {
+		log.Fatalf("failed demo run status = %q, want %q", r.Status, run.StatusFailed)
+	}
+
+	fmt.Printf("Workflow failed as expected: %v\n", err)
 	fmt.Print(formatTimeline(events.Events()))
 }
 
