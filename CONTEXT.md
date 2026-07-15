@@ -64,7 +64,7 @@ internal/tool/      tool contract, registry, and deterministic lookup tool
 internal/workflow/  orchestration of a run through the model boundary
 ```
 
-The current engine executes one model request. It starts the run, checks cancellation, calls `model.Client.Next`, and records success, failure, or cancellation on the in-memory run aggregate. It does not yet execute returned tool calls, iterate through multiple model turns, or persist progress.
+The current engine executes an in-memory bounded model/tool loop. It starts the run, requires a positive `MaxSteps` limit, checks cancellation before each model turn, calls `model.Client.Next`, executes returned tool calls through the registry, and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausting the model-turn limit produces a typed failed run. Progress remains in memory and is not yet durable.
 
 The existing boundaries already establish several important contracts:
 
@@ -72,7 +72,7 @@ The existing boundaries already establish several important contracts:
 - `tool.Tool` exposes a specification and executes a typed call through `context.Context`.
 - `tool.Registry` validates registrations and resolves tools by the model-visible name.
 - `model.Message` can represent system, user, assistant, and correlated tool-result messages.
-- `model.ScriptedClient` makes workflow behavior deterministic and observable in tests.
+- `model.ScriptedClient` makes workflow behavior deterministic and records defensive copies of model requests for transcript assertions.
 - `run.Run` is the authority for legal lifecycle transitions.
 
 When orienting in the codebase, follow behavior through these contracts and their tests instead of inferring architecture from directory names alone.

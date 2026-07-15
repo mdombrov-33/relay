@@ -55,6 +55,40 @@ type Client interface {
 	Next(ctx context.Context, request Request) (Response, error)
 }
 
+func cloneRequest(request Request) Request {
+	return Request{
+		Messages: cloneMessages(request.Messages),
+		Tools:    append([]tool.Spec(nil), request.Tools...),
+	}
+}
+
+func cloneRequests(requests []Request) []Request {
+	if requests == nil {
+		return nil
+	}
+
+	cloned := make([]Request, len(requests))
+	for i, request := range requests {
+		cloned[i] = cloneRequest(request)
+	}
+
+	return cloned
+}
+
+func cloneMessages(messages []Message) []Message {
+	if messages == nil {
+		return nil
+	}
+
+	cloned := make([]Message, len(messages))
+	for i, message := range messages {
+		cloned[i] = message
+		cloned[i].ToolCalls = cloneToolCalls(message.ToolCalls)
+	}
+
+	return cloned
+}
+
 func cloneToolCalls(calls []tool.Call) []tool.Call {
 	if calls == nil {
 		return nil

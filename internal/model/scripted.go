@@ -9,6 +9,7 @@ var ErrNoResponses = errors.New("scripted client has no remaining responses")
 
 type ScriptedClient struct {
 	responses []Response
+	requests  []Request
 	index     int
 }
 
@@ -20,10 +21,12 @@ func NewScriptedClient(responses ...Response) *ScriptedClient {
 	}
 }
 
-func (sc *ScriptedClient) Next(ctx context.Context, _ Request) (Response, error) {
+func (sc *ScriptedClient) Next(ctx context.Context, request Request) (Response, error) {
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
+
+	sc.requests = append(sc.requests, cloneRequest(request))
 
 	if sc.index >= len(sc.responses) {
 		return Response{}, ErrNoResponses
@@ -33,4 +36,8 @@ func (sc *ScriptedClient) Next(ctx context.Context, _ Request) (Response, error)
 	sc.index++
 
 	return response, nil
+}
+
+func (sc *ScriptedClient) Requests() []Request {
+	return cloneRequests(sc.requests)
 }

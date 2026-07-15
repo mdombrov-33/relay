@@ -24,7 +24,7 @@ For each implementation slice:
 5. Keep the slice bounded: normally one behavior or contract that can be completed and reviewed in one sitting.
 6. Review the learner's result for correctness first, then clarity and idiomatic Go.
 7. Verify narrowly during the feedback loop and run the full relevant gate at the end.
-8. After a verified significant slice, provide one scoped, one-line Conventional Commit message and continue with the next slice unless the user asks to pause.
+8. After a verified significant slice, provide one scoped, one-line Conventional Commit message, then state the exact next slice in the same response; continue unless the user asks to pause.
 
 Use a help ladder: conceptual prompt, targeted hint, skeleton, analogous example, then concrete patch. Move directly to a patch when the user asks you to implement or fix the code.
 
