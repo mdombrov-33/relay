@@ -423,3 +423,100 @@ func TestEngineExecute(t *testing.T) {
 		})
 	})
 }
+
+func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {
+	newProcess := func() (Engine, *model.ScriptedClient, run.Run, model.Request) {
+		customerLookup := tool.NewCustomerLookup(tool.Customer{
+			ID:   "cust_123",
+			Name: "Ada Lovelace",
+			Plan: "pro",
+		})
+		incidentLookup := tool.NewIncidentLookup(tool.Incident{
+			ID:         "inc_123",
+			CustomerID: "cust_123",
+			Summary:    "Service outage",
+			Status:     "resolved",
+		})
+
+		registry, err := tool.NewRegistry(customerLookup, incidentLookup)
+		if err != nil {
+			t.Fatalf("NewRegistry() error = %v", err)
+		}
+
+		client := model.NewScriptedClient(
+			model.Response{
+				ToolCalls: []tool.Call{
+					{
+						ID:        "call_customer",
+						Name:      "lookup_customer",
+						Arguments: json.RawMessage(`{"customer_id":"cust_123"}`),
+					},
+				},
+			},
+			model.Response{
+				ToolCalls: []tool.Call{
+					{
+						ID:        "call_incident",
+						Name:      "lookup_incident",
+						Arguments: json.RawMessage(`{"incident_id":"inc_123"}`),
+					},
+				},
+			},
+			model.Response{Text: "Ada's resolved service outage is eligible for review."},
+		)
+
+		engine := Engine{
+			Client:       client,
+			Tools:        registry,
+			MaxSteps:     3,
+			ModelTimeout: time.Second,
+			ToolTimeout:  time.Second,
+		}
+
+		r := run.New("run-123")
+		request := model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "Check customer cust_123 and incident inc_123."},
+			},
+			Tools: []tool.Spec{
+				customerLookup.Spec(),
+				incidentLookup.Spec(),
+			},
+		}
+
+		return engine, client, r, request
+	}
+
+	firstEngine, firstClient, firstRun, firstRequest := newProcess()
+
+	_, err := firstEngine.Execute(context.Background(), &firstRun, firstRequest)
+	if err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if firstRun.Status != run.StatusSucceeded {
+		t.Fatalf("first run status = %q, want %q", firstRun.Status, run.StatusSucceeded)
+	}
+	if got := len(firstClient.Requests()); got != 3 {
+		t.Fatalf("first process model requests = %d, want 3", got)
+	}
+
+	restartedEngine, restartedClient, restartedRun, restartedRequest := newProcess()
+
+	if restartedRun.ID != firstRun.ID {
+		t.Fatalf("restarted run ID = %q, want %q", restartedRun.ID, firstRun.ID)
+	}
+	if restartedRun.Status != run.StatusPending {
+		t.Fatalf("restarted run status = %q, want %q", restartedRun.Status, run.StatusPending)
+	}
+	if got := len(restartedClient.Requests()); got != 0 {
+		t.Fatalf("restarted process model requests = %d, want 0", got)
+	}
+
+	_, err = restartedEngine.Execute(context.Background(), &restartedRun, restartedRequest)
+	if err != nil {
+		t.Fatalf("restarted Execute() error = %v", err)
+	}
+	if got := len(restartedClient.Requests()); got != 3 {
+		t.Errorf("restarted process model requests = %d, want 3", got)
+	}
+}
