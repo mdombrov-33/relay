@@ -16,11 +16,17 @@ type Call struct {
 	Arguments json.RawMessage
 }
 
-type Result struct {
+type Output struct {
 	Content string
+}
+
+type Result struct {
+	CallID   string
+	ToolName string
+	Content  string
 }
 
 type Tool interface {
 	Spec() Spec
-	Execute(ctx context.Context, call Call) (Result, error)
+	Execute(ctx context.Context, call Call) (Output, error)
 }
