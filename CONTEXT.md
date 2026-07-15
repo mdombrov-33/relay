@@ -89,7 +89,6 @@ When orienting in the codebase, follow behavior through these contracts and thei
 7. Waiting approval becomes durable state and must not occupy a goroutine indefinitely.
 8. Full history remains durable even when the model sees bounded context.
 9. External side effects may retry after an ambiguous crash window and therefore require stable idempotency.
-10. Claims in the README and CV must be backed by executable evidence.
 
 ## Learner and collaboration context
 
