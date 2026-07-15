@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+env:
+  GOLANGCI_LINT_VERSION: v2.12.2
+
 permissions:
   contents: read
 
@@ -16,4 +19,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          install-only: true
       - run: make check
