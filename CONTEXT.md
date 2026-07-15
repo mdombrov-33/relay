@@ -57,14 +57,14 @@ The project does not claim to be a general Temporal replacement, a hardened mult
 ## Repository shape today
 
 ```text
-cmd/relay/          executable entry point
+cmd/relay/          deterministic in-memory workflow demo
 internal/run/       run identity, status, and guarded lifecycle transitions
 internal/model/     provider-independent messages, client port, and scripted fake
 internal/tool/      tool contract, registry, and deterministic lookup tools
 internal/workflow/  orchestration of a run through the model boundary
 ```
 
-The current engine executes an in-memory bounded model/tool loop. It starts the run, requires positive `MaxSteps`, `ModelTimeout`, and `ToolTimeout` limits, checks cancellation before each model turn, and derives a deadline-bound child context for every model or tool call. It executes returned tool calls through the registry and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausted step limits and expired call deadlines produce typed failed runs. Progress remains in memory and is not yet durable.
+The current engine executes an in-memory bounded model/tool loop. It starts the run, requires positive `MaxSteps`, `ModelTimeout`, and `ToolTimeout` limits, checks cancellation before each model turn, and derives a deadline-bound child context for every model or tool call. It executes returned tool calls through the registry and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausted step limits and expired call deadlines produce typed failed runs. `go run ./cmd/relay` wires the scripted client, two deterministic lookup tools, registry, and engine into a runnable three-turn demo. Progress remains in memory and is not yet durable.
 
 The existing boundaries already establish several important contracts:
 
