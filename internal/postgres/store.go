@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -20,6 +21,9 @@ var (
 	ErrRunNotTerminal        = errors.New("run must have a terminal status")
 	ErrTerminalEventMismatch = errors.New("terminal event type does not match run status")
 	ErrRunNotRunning         = errors.New("only a running run can transition to a terminal status")
+	ErrRunAlreadyTerminal    = errors.New("run is already terminal")
+	ErrCancellationExpected  = errors.New("run cancellation requires a workflow canceled event")
+	ErrCancellationMismatch  = errors.New("workflow canceled event payload does not match canceled status")
 	ErrNegativeEventCursor   = errors.New("event cursor cannot be negative")
 	ErrRunNotFound           = errors.New("run was not found")
 )
@@ -197,6 +201,90 @@ func (s *Store) TransitionToTerminal(ctx context.Context, r run.Run, terminal ev
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit terminal transition transaction: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) CancelRun(ctx context.Context, runID run.ID, canceled event.Envelope) error {
+	if canceled.Type() != event.TypeWorkflowCancelled {
+		return ErrCancellationExpected
+	}
+	if canceled.RunID() != runID {
+		return ErrEventRunIDMismatch
+	}
+	var payload event.LifecyclePayload
+	if err := json.Unmarshal(canceled.Payload(), &payload); err != nil || payload.Status != run.StatusCanceled {
+		return ErrCancellationMismatch
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin cancel run transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	var status run.Status
+	if err := tx.QueryRow(
+		ctx,
+		`SELECT status
+		 FROM runs
+		 WHERE id = $1
+		 FOR UPDATE`,
+		runID,
+	).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRunNotFound
+		}
+		return fmt.Errorf("lock run for cancellation: %w", err)
+	}
+	if status.IsTerminal() {
+		return ErrRunAlreadyTerminal
+	}
+
+	if _, err := tx.Exec(
+		ctx,
+		`UPDATE runs
+		 SET status = $2, updated_at = $3
+		 WHERE id = $1`,
+		runID,
+		run.StatusCanceled,
+		canceled.OccurredAt(),
+	); err != nil {
+		return fmt.Errorf("cancel run projection: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		ctx,
+		`UPDATE approval_requests
+		 SET status = $2, resolved_at = $3
+		 WHERE run_id = $1 AND status = $4`,
+		runID,
+		ApprovalStatusCanceled,
+		canceled.OccurredAt(),
+		ApprovalStatusPending,
+	); err != nil {
+		return fmt.Errorf("cancel pending approval: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO events (id, run_id, step_key, type, occurred_at, payload)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+		canceled.ID(),
+		canceled.RunID(),
+		canceled.StepKey(),
+		canceled.Type(),
+		canceled.OccurredAt(),
+		string(canceled.Payload()),
+	); err != nil {
+		return fmt.Errorf("insert workflow canceled event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit cancel run transaction: %w", err)
 	}
 
 	return nil

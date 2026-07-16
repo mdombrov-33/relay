@@ -38,6 +38,7 @@ const (
 	ApprovalStatusPending  ApprovalStatus = "pending"
 	ApprovalStatusApproved ApprovalStatus = "approved"
 	ApprovalStatusRejected ApprovalStatus = "rejected"
+	ApprovalStatusCanceled ApprovalStatus = "canceled"
 )
 
 type ApprovalRequest struct {

@@ -253,6 +253,122 @@ func TestStoreTransitionToTerminalRollsBackWhenEventInsertFails(t *testing.T) {
 	}
 }
 
+func TestStoreCancelRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	tests := []struct {
+		name   string
+		create func(*testing.T, *pgxpool.Pool, context.Context, string) run.Run
+	}{
+		{name: "pending", create: pendingIntegrationRun},
+		{name: "running", create: runningIntegrationRun},
+		{
+			name: "waiting",
+			create: func(t *testing.T, pool *pgxpool.Pool, ctx context.Context, suffix string) run.Run {
+				r, _ := waitingApprovalIntegrationRun(t, pool, ctx, suffix)
+				return r
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := test.create(t, pool, ctx, "cancel-"+test.name)
+			canceled := newLifecycleEvent(t, integrationEventID(t, "canceled-"+test.name), r.ID, event.TypeWorkflowCancelled, run.StatusCanceled)
+
+			if err := NewStore(pool).CancelRun(ctx, r.ID, canceled); err != nil {
+				t.Fatalf("CancelRun() error = %v", err)
+			}
+
+			var status run.Status
+			if err := pool.QueryRow(ctx, "SELECT status FROM runs WHERE id = $1", r.ID).Scan(&status); err != nil {
+				t.Fatalf("query canceled run: %v", err)
+			}
+			if status != run.StatusCanceled {
+				t.Errorf("run status = %q, want %q", status, run.StatusCanceled)
+			}
+
+			stored, err := NewStore(pool).ListRunEvents(ctx, r.ID, 0)
+			if err != nil {
+				t.Fatalf("ListRunEvents() error = %v", err)
+			}
+			if stored[len(stored)-1].ID() != canceled.ID() || stored[len(stored)-1].Type() != event.TypeWorkflowCancelled {
+				t.Errorf("last event = %#v, want cancellation %q", stored[len(stored)-1], canceled.ID())
+			}
+
+			if test.name == "waiting" {
+				var approvalStatus ApprovalStatus
+				var resolvedAt *time.Time
+				if err := pool.QueryRow(ctx, "SELECT status, resolved_at FROM approval_requests WHERE run_id = $1", r.ID).Scan(&approvalStatus, &resolvedAt); err != nil {
+					t.Fatalf("query canceled approval: %v", err)
+				}
+				if approvalStatus != ApprovalStatusCanceled || resolvedAt == nil || !resolvedAt.Equal(canceled.OccurredAt()) {
+					t.Errorf("approval = (%q, %v), want canceled at %s", approvalStatus, resolvedAt, canceled.OccurredAt())
+				}
+			}
+		})
+	}
+}
+
+func TestStoreCancelRunRejectsMissingAndTerminalRuns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+	store := NewStore(pool)
+
+	missingID := integrationRunID(t, "cancel-missing")
+	missingEvent := newLifecycleEvent(t, integrationEventID(t, "cancel-missing"), missingID, event.TypeWorkflowCancelled, run.StatusCanceled)
+	if err := store.CancelRun(ctx, missingID, missingEvent); !errors.Is(err, ErrRunNotFound) {
+		t.Errorf("CancelRun() missing error = %v, want %v", err, ErrRunNotFound)
+	}
+
+	r := runningIntegrationRun(t, pool, ctx, "cancel-terminal")
+	if err := r.Succeed(); err != nil {
+		t.Fatalf("Succeed() error = %v", err)
+	}
+	completed := newLifecycleEvent(t, integrationEventID(t, "cancel-terminal-completed"), r.ID, event.TypeWorkflowCompleted, r.Status)
+	if err := store.TransitionToTerminal(ctx, r, completed); err != nil {
+		t.Fatalf("TransitionToTerminal() error = %v", err)
+	}
+	canceled := newLifecycleEvent(t, integrationEventID(t, "cancel-terminal-canceled"), r.ID, event.TypeWorkflowCancelled, run.StatusCanceled)
+	if err := store.CancelRun(ctx, r.ID, canceled); !errors.Is(err, ErrRunAlreadyTerminal) {
+		t.Errorf("CancelRun() terminal error = %v, want %v", err, ErrRunAlreadyTerminal)
+	}
+}
+
+func TestStoreCancelRunRollsBackWhenEventInsertFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r, request := waitingApprovalIntegrationRun(t, pool, ctx, "cancel-rollback")
+	canceled := newLifecycleEvent(t, "", r.ID, event.TypeWorkflowCancelled, run.StatusCanceled)
+	if err := NewStore(pool).CancelRun(ctx, r.ID, canceled); err == nil {
+		t.Fatal("CancelRun() error = nil, want event insert failure")
+	}
+
+	var runStatus run.Status
+	var approvalStatus ApprovalStatus
+	var resolvedAt *time.Time
+	if err := pool.QueryRow(ctx, "SELECT status FROM runs WHERE id = $1", r.ID).Scan(&runStatus); err != nil {
+		t.Fatalf("query rolled-back run: %v", err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT status, resolved_at FROM approval_requests WHERE id = $1", request.ID).Scan(&approvalStatus, &resolvedAt); err != nil {
+		t.Fatalf("query rolled-back approval: %v", err)
+	}
+	if runStatus != run.StatusWaiting || approvalStatus != ApprovalStatusPending || resolvedAt != nil {
+		t.Errorf("rolled-back cancellation = (%q, %q, %v), want waiting, pending, nil", runStatus, approvalStatus, resolvedAt)
+	}
+}
+
 func TestStoreRequestApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

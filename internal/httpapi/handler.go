@@ -20,6 +20,7 @@ import (
 const maxCommandBodyBytes = 8 << 10
 
 type store interface {
+	CancelRun(ctx context.Context, runID run.ID, canceled event.Envelope) error
 	FindRun(ctx context.Context, runID run.ID) (postgres.RunRecord, error)
 	FindApprovalRequest(ctx context.Context, requestID string) (postgres.ApprovalRequestRecord, error)
 	ListRunEvents(ctx context.Context, runID run.ID, afterSequence int64) ([]event.Stored, error)
@@ -78,6 +79,11 @@ type approvalCommandResponse struct {
 	Decision  postgres.ApprovalDecision `json:"decision"`
 }
 
+type cancellationResponse struct {
+	ID     run.ID     `json:"id"`
+	Status run.Status `json:"status"`
+}
+
 func NewHandler(store store) http.Handler {
 	return newHandler(store, func() time.Time { return time.Now().UTC() }, randomID)
 }
@@ -85,6 +91,7 @@ func NewHandler(store store) http.Handler {
 func newHandler(store store, now func() time.Time, newID func(string) (string, error)) http.Handler {
 	h := &Handler{store: store, mux: http.NewServeMux(), now: now, newID: newID}
 	h.mux.HandleFunc("GET /v1/runs/{id}", h.getRun)
+	h.mux.HandleFunc("POST /v1/runs/{id}/cancel", h.cancelRun)
 	h.mux.HandleFunc("GET /v1/runs/{id}/events", h.getRunEvents)
 	h.mux.HandleFunc("POST /v1/runs/{id}/signals/approval", h.resolveApproval)
 	return h
@@ -228,6 +235,41 @@ func (h *Handler) resolveApproval(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, approvalCommandResponse(command))
+}
+
+func (h *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
+	runID := run.ID(r.PathValue("id"))
+	eventID, err := h.newID("event")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+	canceled, err := event.New(
+		eventID,
+		runID,
+		run.StepKey("workflow"),
+		event.TypeWorkflowCancelled,
+		h.now(),
+		event.LifecyclePayload{Status: run.StatusCanceled},
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	if err := h.store.CancelRun(r.Context(), runID, canceled); err != nil {
+		switch {
+		case errors.Is(err, postgres.ErrRunNotFound):
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "run not found"})
+		case errors.Is(err, postgres.ErrRunAlreadyTerminal):
+			writeJSON(w, http.StatusConflict, errorResponse{Error: "run is already terminal"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, cancellationResponse{ID: runID, Status: run.StatusCanceled})
 }
 
 func (h *Handler) writeApprovalError(w http.ResponseWriter, err error) {

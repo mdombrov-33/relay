@@ -376,6 +376,62 @@ func TestResolveApprovalMapsErrors(t *testing.T) {
 	}
 }
 
+func TestCancelRun(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 14, 0, 0, 0, time.UTC)
+	store := &fakeRunReader{}
+	handler := newHandler(store, func() time.Time { return now }, func(prefix string) (string, error) { return prefix + "-123", nil })
+
+	response := serveRequest(handler, http.MethodPost, "/v1/runs/run-123/cancel")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if strings.TrimSpace(response.Body.String()) != `{"id":"run-123","status":"canceled"}` {
+		t.Errorf("body = %q, want canceled run", strings.TrimSpace(response.Body.String()))
+	}
+	if store.canceledRunID != run.ID("run-123") {
+		t.Errorf("CancelRun() run ID = %q, want run-123", store.canceledRunID)
+	}
+	if store.canceled.ID() != "event-123" || store.canceled.RunID() != run.ID("run-123") || store.canceled.StepKey() != run.StepKey("workflow") || store.canceled.Type() != event.TypeWorkflowCancelled || !store.canceled.OccurredAt().Equal(now) {
+		t.Errorf("CancelRun() event = %#v, want server-owned cancellation event", store.canceled)
+	}
+	var payload event.LifecyclePayload
+	if err := json.Unmarshal(store.canceled.Payload(), &payload); err != nil {
+		t.Fatalf("decode cancellation payload: %v", err)
+	}
+	if payload.Status != run.StatusCanceled {
+		t.Errorf("cancellation payload status = %q, want %q", payload.Status, run.StatusCanceled)
+	}
+}
+
+func TestCancelRunMapsStoreErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "not found", err: postgres.ErrRunNotFound, wantStatus: http.StatusNotFound, wantBody: `{"error":"run not found"}`},
+		{name: "already terminal", err: postgres.ErrRunAlreadyTerminal, wantStatus: http.StatusConflict, wantBody: `{"error":"run is already terminal"}`},
+		{name: "store failure", err: errors.New("password=secret"), wantStatus: http.StatusInternalServerError, wantBody: `{"error":"internal server error"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeRunReader{cancelErr: test.err}
+			handler := newHandler(store, time.Now, func(prefix string) (string, error) { return prefix + "-123", nil })
+			response := serveRequest(handler, http.MethodPost, "/v1/runs/run-123/cancel")
+
+			if response.Code != test.wantStatus {
+				t.Errorf("status = %d, want %d", response.Code, test.wantStatus)
+			}
+			if strings.TrimSpace(response.Body.String()) != test.wantBody {
+				t.Errorf("body = %q, want %q", strings.TrimSpace(response.Body.String()), test.wantBody)
+			}
+		})
+	}
+}
+
 type fakeRunReader struct {
 	record               postgres.RunRecord
 	events               []event.Stored
@@ -384,17 +440,28 @@ type fakeRunReader struct {
 	eventsErr            error
 	approvalErr          error
 	approvalResolveErr   error
+	cancelErr            error
 	approvalCreated      bool
 	runID                run.ID
 	eventsRunID          run.ID
 	approvalRequestID    string
 	signal               postgres.ApprovalSignal
 	resolved             event.Envelope
+	canceledRunID        run.ID
+	canceled             event.Envelope
 	after                int64
 	findCalls            int
 	eventCalls           int
 	approvalFindCalls    int
 	approvalResolveCalls int
+	cancelCalls          int
+}
+
+func (f *fakeRunReader) CancelRun(_ context.Context, runID run.ID, canceled event.Envelope) error {
+	f.cancelCalls++
+	f.canceledRunID = runID
+	f.canceled = canceled
+	return f.cancelErr
 }
 
 func (f *fakeRunReader) FindRun(_ context.Context, runID run.ID) (postgres.RunRecord, error) {

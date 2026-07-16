@@ -103,6 +103,11 @@ decision, resolves the request, resumes only its matching waiting run, and
 appends `approval.resolved.v1` in one transaction. Repeated matching decisions
 are idempotent; conflicting decisions fail explicitly.
 
+Goose migration `000006` adds a canceled approval status. `Store.CancelRun`
+locks the run, permits pending, running, or waiting state, marks any pending
+approval canceled, changes the run projection to canceled, and appends
+`workflow.cancelled.v1` in one transaction.
+
 `workflow.ApprovalGate` derives a stable request ID from the run and tool step,
 persists the first wait, and consumes the stored status on recovery. The engine
 returns `ErrApprovalPending` without holding a goroutine, executes the original
@@ -119,10 +124,12 @@ page with an exclusive cursor and a deterministic `nextAfter` value.
 derives its step from the durable request, and supplies server-owned signal and
 event identity plus time to the existing atomic resolution transaction. A
 matching duplicate returns the same successful response; a conflict is explicit.
+`POST /v1/runs/{id}/cancel` supplies a server-owned lifecycle event to the
+atomic cancellation transaction, returns not found for a missing run, and
+rejects an already-terminal run as a conflict.
 
-Next: add durable run cancellation through PostgreSQL and
-`POST /v1/runs/{id}/cancel`, committing the canceled projection and lifecycle
-event together for any nonterminal run.
+Next: add `POST /v1/runs` so an operator can create a durable pending run and
+its queued lifecycle event without direct database access.
 
 ## Repository map
 
