@@ -59,7 +59,7 @@ func TestEngineExecute(t *testing.T) {
 
 	t.Run("returns the model response and succeeds the run", func(t *testing.T) {
 		r := run.New("run-123")
-		events := &event.Log{}
+		events := event.NewLog()
 		engine := Engine{
 			Client: model.NewScriptedClient(
 				model.Response{Text: "Hello from Relay"},
@@ -101,7 +101,7 @@ func TestEngineExecute(t *testing.T) {
 
 	t.Run("marks the run failed when the model fails", func(t *testing.T) {
 		r := run.New("run-123")
-		events := &event.Log{}
+		events := event.NewLog()
 		engine := Engine{
 			Client:       model.NewScriptedClient(),
 			Events:       events,
@@ -129,7 +129,7 @@ func TestEngineExecute(t *testing.T) {
 
 	t.Run("cancels the run when the context is canceled", func(t *testing.T) {
 		r := run.New("run-123")
-		events := &event.Log{}
+		events := event.NewLog()
 		engine := Engine{
 			Client:       model.NewScriptedClient(),
 			Events:       events,
@@ -182,7 +182,7 @@ func TestEngineExecute(t *testing.T) {
 		)
 
 		r := run.New("run-123")
-		events := &event.Log{}
+		events := event.NewLog()
 		engine := Engine{
 			Client:       client,
 			Events:       events,
@@ -299,7 +299,7 @@ func TestEngineExecute(t *testing.T) {
 		r := run.New("run-123")
 		engine := Engine{
 			Client:       client,
-			Events:       &event.Log{},
+			Events:       event.NewLog(),
 			Tools:        registry,
 			MaxSteps:     1,
 			ModelTimeout: time.Second,
@@ -361,7 +361,7 @@ func TestEngineExecute(t *testing.T) {
 		)
 
 		r := run.New("run-123")
-		events := &event.Log{}
+		events := event.NewLog()
 		engine := Engine{
 			Client:       client,
 			Events:       events,
@@ -460,7 +460,7 @@ func TestEngineExecute(t *testing.T) {
 			r := run.New("run-123")
 			engine := Engine{
 				Client:       blockingClient{},
-				Events:       &event.Log{},
+				Events:       event.NewLog(),
 				MaxSteps:     1,
 				ModelTimeout: time.Second,
 				ToolTimeout:  time.Second,
@@ -502,7 +502,7 @@ func TestEngineExecute(t *testing.T) {
 			})
 
 			r := run.New("run-123")
-			events := &event.Log{}
+			events := event.NewLog()
 			engine := Engine{
 				Client:       client,
 				Events:       events,
@@ -580,7 +580,7 @@ func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {
 
 		engine := Engine{
 			Client:       client,
-			Events:       &event.Log{},
+			Events:       event.NewLog(),
 			Tools:        registry,
 			MaxSteps:     3,
 			ModelTimeout: time.Second,

@@ -2,13 +2,23 @@ package event_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/run"
 )
 
 func TestLogRecord(t *testing.T) {
-	var log event.Log
+	occurredAt := time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC)
+	ids := []string{"event-fixed-1", "event-fixed-2"}
+	log := event.NewLogWith(
+		func() time.Time { return occurredAt },
+		func() string {
+			id := ids[0]
+			ids = ids[1:]
+			return id
+		},
+	)
 
 	first, err := log.Record(
 		run.ID("run-123"),
@@ -30,14 +40,17 @@ func TestLogRecord(t *testing.T) {
 		t.Fatalf("Record() second event error = %v", err)
 	}
 
-	if got := first.ID(); got != "event-1" {
-		t.Errorf("first event ID = %q, want %q", got, "event-1")
+	if got := first.ID(); got != "event-fixed-1" {
+		t.Errorf("first event ID = %q, want %q", got, "event-fixed-1")
 	}
-	if got := second.ID(); got != "event-2" {
-		t.Errorf("second event ID = %q, want %q", got, "event-2")
+	if got := second.ID(); got != "event-fixed-2" {
+		t.Errorf("second event ID = %q, want %q", got, "event-fixed-2")
 	}
-	if first.OccurredAt().IsZero() {
-		t.Error("first event occurrence time is zero")
+	if got := first.OccurredAt(); !got.Equal(occurredAt) {
+		t.Errorf("first event occurrence time = %s, want %s", got, occurredAt)
+	}
+	if got := second.OccurredAt(); !got.Equal(occurredAt) {
+		t.Errorf("second event occurrence time = %s, want %s", got, occurredAt)
 	}
 
 	events := log.Events()

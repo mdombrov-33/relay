@@ -70,7 +70,7 @@ func runSuccessfulDemo() {
 		model.Response{Text: "Ada's resolved service outage is eligible for review."},
 	)
 
-	events := &event.Log{}
+	events := event.NewLog()
 	engine := workflow.Engine{
 		Client:       client,
 		Events:       events,
@@ -99,7 +99,7 @@ func runSuccessfulDemo() {
 }
 
 func runFailedDemo() {
-	events := &event.Log{}
+	events := event.NewLog()
 	engine := workflow.Engine{
 		Client:       model.NewScriptedClient(),
 		Events:       events,

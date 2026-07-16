@@ -30,7 +30,7 @@ func TestNewRejectsPayloadExceedingMaximum(t *testing.T) {
 }
 
 func TestLogDoesNotRecordPayloadExceedingMaximum(t *testing.T) {
-	var log Log
+	log := NewLog()
 
 	_, err := log.Record(
 		run.ID("run-123"),

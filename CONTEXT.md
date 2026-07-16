@@ -32,7 +32,8 @@ atomically creates a pending run or applies a terminal transition with its
 lifecycle event, and reads bounded ordered event pages by run or global cursor.
 `make test-integration` connects to the migrated local database.
 
-Next: inject clock and ID-generation boundaries for deterministic persistence.
+Next: expand real-PostgreSQL integration coverage, starting with reopening a
+pool and reading previously committed event history.
 
 ## Repository map
 

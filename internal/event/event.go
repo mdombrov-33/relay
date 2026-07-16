@@ -99,22 +99,35 @@ var (
 )
 
 func New(id string, runID run.ID, stepKey run.StepKey, typ Type, occurredAt time.Time, payload Payload) (Envelope, error) {
-	encodedPayload, err := json.Marshal(payload)
+	encodedPayload, err := encodePayload(payload)
 	if err != nil {
-		return Envelope{}, fmt.Errorf("marshal event payload: %w", err)
-	}
-	if len(encodedPayload) > MaxPayloadBytes {
-		return Envelope{}, fmt.Errorf("%w: %d bytes exceeds %d", ErrPayloadTooLarge, len(encodedPayload), MaxPayloadBytes)
+		return Envelope{}, err
 	}
 
+	return newEnvelope(id, runID, stepKey, typ, occurredAt, encodedPayload), nil
+}
+
+func encodePayload(payload Payload) (json.RawMessage, error) {
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal event payload: %w", err)
+	}
+	if len(encodedPayload) > MaxPayloadBytes {
+		return nil, fmt.Errorf("%w: %d bytes exceeds %d", ErrPayloadTooLarge, len(encodedPayload), MaxPayloadBytes)
+	}
+
+	return encodedPayload, nil
+}
+
+func newEnvelope(id string, runID run.ID, stepKey run.StepKey, typ Type, occurredAt time.Time, payload json.RawMessage) Envelope {
 	return Envelope{
 		id:         id,
 		runID:      runID,
 		stepKey:    stepKey,
 		typ:        typ,
 		occurredAt: occurredAt,
-		payload:    encodedPayload,
-	}, nil
+		payload:    payload,
+	}
 }
 
 // NewStored reconstructs an event read from durable storage. Stored payloads
