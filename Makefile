@@ -23,7 +23,7 @@ test-race:
 	$(GO) test -race ./...
 
 test-integration:
-	DATABASE_URL="$(DATABASE_URL)" $(GO) test -tags=integration ./internal/postgres
+	DATABASE_URL="$(DATABASE_URL)" $(GO) test -tags=integration ./internal/postgres ./internal/workflow
 
 relayctl:
 	DATABASE_URL="$(DATABASE_URL)" $(GO) run ./cmd/relayctl $(ARGS)

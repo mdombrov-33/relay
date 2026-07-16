@@ -40,8 +40,13 @@ JSON result after reopening a pool. Recovery increments a running checkpoint's
 attempt; completion requires that attempt, preventing a stale worker from
 overwriting the current attempt.
 
-Next: add a durable step runner around a real workflow operation so its callback
-executes only on a newly claimed or recovered attempt, never for a cached result.
+The workflow now has an opt-in durable step runner. It hashes a model request,
+claims or recovers its checkpoint, and returns the stored response without
+calling the model when that checkpoint is complete. An integration test closes
+the first PostgreSQL pool and proves a recovery engine makes zero model calls.
+
+Next: route tool execution through the same runner, with a restart test proving
+a completed tool result is reused rather than re-executed.
 
 ## Repository map
 

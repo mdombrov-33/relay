@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -30,6 +31,7 @@ type Engine struct {
 	MaxSteps     int
 	ModelTimeout time.Duration
 	ToolTimeout  time.Duration
+	Checkpoints  *StepRunner
 }
 
 func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) (model.Response, error) {
@@ -74,10 +76,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			return model.Response{}, err
 		}
 
-		modelCtx, cancel := context.WithTimeout(ctx, e.ModelTimeout)
-		response, err := e.Client.Next(modelCtx, request)
-		cancel()
-
+		response, err := e.nextModel(ctx, r.ID, modelStepKey, request)
 		if err != nil {
 			if recordErr := e.record(r, modelStepKey, event.TypeModelFailed, event.ModelPayload{}); recordErr != nil {
 				return model.Response{}, recordErr
@@ -201,6 +200,47 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	}
 
 	return model.Response{}, fmt.Errorf("execute workflow: %w", ErrStepLimitExceeded)
+}
+
+func (e Engine) nextModel(ctx context.Context, runID run.ID, stepKey run.StepKey, request model.Request) (model.Response, error) {
+	if e.Checkpoints == nil {
+		modelCtx, cancel := context.WithTimeout(ctx, e.ModelTimeout)
+		defer cancel()
+
+		return e.Client.Next(modelCtx, request)
+	}
+
+	input, err := json.Marshal(request)
+	if err != nil {
+		return model.Response{}, fmt.Errorf("marshal model step input: %w", err)
+	}
+
+	result, err := e.Checkpoints.Run(ctx, runID, stepKey, input, func(stepCtx context.Context) (json.RawMessage, error) {
+		modelCtx, cancel := context.WithTimeout(stepCtx, e.ModelTimeout)
+		defer cancel()
+
+		response, err := e.Client.Next(modelCtx, request)
+		if err != nil {
+			return nil, err
+		}
+
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			return nil, fmt.Errorf("marshal model response: %w", err)
+		}
+
+		return encoded, nil
+	})
+	if err != nil {
+		return model.Response{}, err
+	}
+
+	var response model.Response
+	if err := json.Unmarshal(result, &response); err != nil {
+		return model.Response{}, fmt.Errorf("decode checkpointed model response: %w", err)
+	}
+
+	return response, nil
 }
 
 func (e Engine) record(r *run.Run, stepKey run.StepKey, typ event.Type, payload event.Payload) error {

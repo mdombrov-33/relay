@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/model"
+	"github.com/mdombrov-33/relay/internal/postgres"
 	"github.com/mdombrov-33/relay/internal/run"
 	"github.com/mdombrov-33/relay/internal/tool"
 )
@@ -535,6 +537,46 @@ func TestEngineExecute(t *testing.T) {
 			)
 		})
 	})
+}
+
+func TestEngineExecuteReturnsCheckpointedModelResponse(t *testing.T) {
+	client := model.NewScriptedClient(model.Response{Text: "the model should not run"})
+	store := &checkpointStoreStub{
+		claim: func(context.Context, run.ID, run.StepKey, [sha256.Size]byte, time.Time) (postgres.StepCheckpoint, error) {
+			return postgres.StepCheckpoint{
+				Status: postgres.StepStatusCompleted,
+				Result: json.RawMessage(`{"Text":"cached model response"}`),
+			}, nil
+		},
+	}
+	runner := StepRunner{Store: store}
+	r := run.New("run-123")
+	events := event.NewLog()
+	engine := Engine{
+		Client:       client,
+		Events:       events,
+		MaxSteps:     1,
+		ModelTimeout: time.Second,
+		ToolTimeout:  time.Second,
+		Checkpoints:  &runner,
+	}
+
+	response, err := engine.Execute(context.Background(), &r, model.Request{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.Text != "cached model response" {
+		t.Errorf("response text = %q, want cached model response", response.Text)
+	}
+	if len(client.Requests()) != 0 {
+		t.Errorf("model requests = %d, want 0", len(client.Requests()))
+	}
+	assertEventTypes(t, events.Events(),
+		event.TypeWorkflowStarted,
+		event.TypeModelRequested,
+		event.TypeModelCompleted,
+		event.TypeWorkflowCompleted,
+	)
 }
 
 func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {

@@ -10,7 +10,6 @@ import (
 	"github.com/mdombrov-33/relay/internal/run"
 )
 
-// MaxPayloadBytes limits the encoded payload of a newly emitted event.
 const MaxPayloadBytes = 8 << 10
 
 var ErrPayloadTooLarge = errors.New("event payload exceeds maximum size")
@@ -39,28 +38,20 @@ const (
 	TypeToolDenied        Type = "tool.denied.v1"
 )
 
-// Payload identifies a safe payload type permitted in newly emitted events.
-//
-// The sealed interface makes redaction a construction-time policy: event
-// payloads contain only display-safe metadata, never prompts, model text, tool
-// arguments, tool results, errors, or credentials.
 type Payload interface {
 	isPayload()
 }
 
-// LifecyclePayload records only a run's current status.
 type LifecyclePayload struct {
 	Status run.Status `json:"status"`
 }
 
 func (LifecyclePayload) isPayload() {}
 
-// ModelPayload intentionally records no model input or output.
 type ModelPayload struct{}
 
 func (ModelPayload) isPayload() {}
 
-// ToolPayload identifies a tool call without retaining its input or output.
 type ToolPayload struct {
 	CallID   string `json:"callId"`
 	ToolName string `json:"toolName"`
@@ -77,8 +68,6 @@ type Envelope struct {
 	payload    json.RawMessage
 }
 
-// Stored is an event envelope read from durable storage. Sequence is assigned
-// by PostgreSQL and orders events within a run and across all runs.
 type Stored struct {
 	Sequence int64
 	Envelope
