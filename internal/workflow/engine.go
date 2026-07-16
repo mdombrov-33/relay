@@ -152,10 +152,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 				return model.Response{}, fmt.Errorf("lookup tool %q: %w", call.Name, err)
 			}
 
-			toolCtx, cancel := context.WithTimeout(ctx, e.ToolTimeout)
-			output, err := executable.Execute(toolCtx, call)
-			cancel()
-
+			output, err := e.executeTool(ctx, r.ID, toolStepKey, call, executable)
 			if err != nil {
 				if recordErr := e.record(r, toolStepKey, event.TypeToolFailed, payload); recordErr != nil {
 					return model.Response{}, recordErr
@@ -241,6 +238,47 @@ func (e Engine) nextModel(ctx context.Context, runID run.ID, stepKey run.StepKey
 	}
 
 	return response, nil
+}
+
+func (e Engine) executeTool(ctx context.Context, runID run.ID, stepKey run.StepKey, call tool.Call, executable tool.Tool) (tool.Output, error) {
+	if e.Checkpoints == nil {
+		toolCtx, cancel := context.WithTimeout(ctx, e.ToolTimeout)
+		defer cancel()
+
+		return executable.Execute(toolCtx, call)
+	}
+
+	input, err := json.Marshal(call)
+	if err != nil {
+		return tool.Output{}, fmt.Errorf("marshal tool step input: %w", err)
+	}
+
+	result, err := e.Checkpoints.Run(ctx, runID, stepKey, input, func(stepCtx context.Context) (json.RawMessage, error) {
+		toolCtx, cancel := context.WithTimeout(stepCtx, e.ToolTimeout)
+		defer cancel()
+
+		output, err := executable.Execute(toolCtx, call)
+		if err != nil {
+			return nil, err
+		}
+
+		encoded, err := json.Marshal(output)
+		if err != nil {
+			return nil, fmt.Errorf("marshal tool output: %w", err)
+		}
+
+		return encoded, nil
+	})
+	if err != nil {
+		return tool.Output{}, err
+	}
+
+	var output tool.Output
+	if err := json.Unmarshal(result, &output); err != nil {
+		return tool.Output{}, fmt.Errorf("decode checkpointed tool output: %w", err)
+	}
+
+	return output, nil
 }
 
 func (e Engine) record(r *run.Run, stepKey run.StepKey, typ event.Type, payload event.Payload) error {

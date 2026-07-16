@@ -40,6 +40,23 @@ func (blockingTool) Execute(ctx context.Context, _ tool.Call) (tool.Output, erro
 	return tool.Output{}, ctx.Err()
 }
 
+type countingTool struct {
+	spec   tool.Spec
+	output tool.Output
+	calls  int
+}
+
+var _ tool.Tool = (*countingTool)(nil)
+
+func (t *countingTool) Spec() tool.Spec {
+	return t.spec
+}
+
+func (t *countingTool) Execute(context.Context, tool.Call) (tool.Output, error) {
+	t.calls++
+	return t.output, nil
+}
+
 func TestEngineExecute(t *testing.T) {
 	t.Run("requires an event log before starting the run", func(t *testing.T) {
 		r := run.New("run-123")
@@ -577,6 +594,76 @@ func TestEngineExecuteReturnsCheckpointedModelResponse(t *testing.T) {
 		event.TypeModelCompleted,
 		event.TypeWorkflowCompleted,
 	)
+}
+
+func TestEngineExecuteReturnsCheckpointedToolOutput(t *testing.T) {
+	cachedOutput := tool.Output{Content: `{"customer":"cached"}`}
+	cachedResult, err := json.Marshal(cachedOutput)
+	if err != nil {
+		t.Fatalf("marshal cached tool output: %v", err)
+	}
+	executable := &countingTool{
+		spec: tool.Spec{
+			Name:        "lookup_customer",
+			Description: "Looks up a customer",
+		},
+		output: tool.Output{Content: `{"customer":"fresh"}`},
+	}
+	registry, err := tool.NewRegistry(executable)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	store := &checkpointStoreStub{
+		claim: func(_ context.Context, _ run.ID, stepKey run.StepKey, _ [sha256.Size]byte, _ time.Time) (postgres.StepCheckpoint, error) {
+			if stepKey == "tool/1/call_123" {
+				return postgres.StepCheckpoint{Attempt: 1, Status: postgres.StepStatusCompleted, Result: cachedResult}, nil
+			}
+			return postgres.StepCheckpoint{Attempt: 1, Status: postgres.StepStatusRunning}, nil
+		},
+		complete: func(_ context.Context, _ run.ID, _ run.StepKey, _ [sha256.Size]byte, _ int, result json.RawMessage, _ time.Time) (postgres.StepCheckpoint, error) {
+			return postgres.StepCheckpoint{Status: postgres.StepStatusCompleted, Result: result}, nil
+		},
+	}
+	runner := StepRunner{Store: store}
+	client := model.NewScriptedClient(
+		model.Response{ToolCalls: []tool.Call{{
+			ID:        "call_123",
+			Name:      "lookup_customer",
+			Arguments: json.RawMessage(`{"customer_id":"cust_123"}`),
+		}}},
+		model.Response{Text: "The cached customer was found."},
+	)
+	r := run.New("run-123")
+	engine := Engine{
+		Client:       client,
+		Events:       event.NewLog(),
+		Tools:        registry,
+		MaxSteps:     2,
+		ModelTimeout: time.Second,
+		ToolTimeout:  time.Second,
+		Checkpoints:  &runner,
+	}
+
+	response, err := engine.Execute(context.Background(), &r, model.Request{
+		Tools: []tool.Spec{executable.Spec()},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.Text != "The cached customer was found." {
+		t.Errorf("response text = %q, want final model response", response.Text)
+	}
+	if executable.calls != 0 {
+		t.Errorf("tool calls = %d, want 0", executable.calls)
+	}
+
+	requests := client.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(requests))
+	}
+	if got := requests[1].Messages[1].Content; got != cachedOutput.Content {
+		t.Errorf("cached tool content = %q, want %q", got, cachedOutput.Content)
+	}
 }
 
 func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {

@@ -23,8 +23,8 @@ event timeline.
 
 ## Current phase
 
-Milestone 3 is complete. Milestone 4, checkpointed steps and crash recovery,
-is active.
+Milestones 3 and 4 are complete. Milestone 5, idempotent effects and outbox
+reasoning, is active.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
@@ -45,8 +45,13 @@ claims or recovers its checkpoint, and returns the stored response without
 calling the model when that checkpoint is complete. An integration test closes
 the first PostgreSQL pool and proves a recovery engine makes zero model calls.
 
-Next: route tool execution through the same runner, with a restart test proving
-a completed tool result is reused rather than re-executed.
+The same runner now wraps tool calls, hashing the full call and storing the
+serialized tool output. A pool-restart test proves a completed model/tool/model
+sequence returns its durable results without calling the recovered model client
+or tool executable.
+
+Next: add the synthetic effect ledger and Store API keyed by a stable
+idempotency key, preparing a retried external effect to become a no-op.
 
 ## Repository map
 
