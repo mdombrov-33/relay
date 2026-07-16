@@ -23,8 +23,8 @@ event timeline.
 
 ## Current phase
 
-Milestones 3 through 7 are complete. Milestone 8, durable human approval, is
-active.
+Milestones 3 through 8 are complete. Milestone 9, HTTP transport, SSE, and the
+inspector, is active.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
@@ -83,10 +83,10 @@ Registered tools now declare validated `read` or `effect` authority. The engine
 retrieves stored registry metadata for a configured policy before executable
 resolution, so `policy.Allowlist` decides declared authority rather than a
 model-proposed name; missing policy remains deny by default. A distinct
-`require_approval` decision records `approval.requested.v1` and leaves the tool
-unresolved, but does not yet wait durably.
+`require_approval` decision routes through a durable approval gate before the
+tool can be resolved.
 
-Milestone 7 is complete. Milestone 8, durable human approval, is active.
+Milestone 8, durable human approval, is complete.
 The in-memory run lifecycle now permits `running -> waiting -> running`, treats
 waiting as non-terminal, and permits cancellation while waiting. Success and
 failure remain legal only from running.
@@ -103,8 +103,16 @@ decision, resolves the request, resumes only its matching waiting run, and
 appends `approval.resolved.v1` in one transaction. Repeated matching decisions
 are idempotent; conflicting decisions fail explicitly.
 
-Next: connect durable approval state to the workflow so a gated tool executes
-only after an approved signal and a rejected signal returns a safe denial.
+`workflow.ApprovalGate` derives a stable request ID from the run and tool step,
+persists the first wait, and consumes the stored status on recovery. The engine
+returns `ErrApprovalPending` without holding a goroutine, executes the original
+checkpointed call only after approval, and gives the model a safe rejection
+result without resolving the executable. Integration tests restart while the
+request is pending and again after its signal.
+
+Next: expose durable run and pending-approval projections through the first
+read-only HTTP endpoints, establishing the transport boundary before commands
+and SSE are added.
 
 ## Repository map
 

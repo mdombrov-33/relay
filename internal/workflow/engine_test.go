@@ -66,6 +66,27 @@ func (approvalRequiredPolicy) Decide(tool.Spec) policy.Decision {
 	return policy.DecisionRequireApproval
 }
 
+type approvalStoreStub struct {
+	record         postgres.ApprovalRequestRecord
+	findErr        error
+	requested      postgres.ApprovalRequest
+	requestedEvent event.Envelope
+	requestCalls   int
+}
+
+var _ ApprovalStore = (*approvalStoreStub)(nil)
+
+func (s *approvalStoreStub) FindApprovalRequest(context.Context, string) (postgres.ApprovalRequestRecord, error) {
+	return s.record, s.findErr
+}
+
+func (s *approvalStoreStub) RequestApproval(_ context.Context, _ run.Run, request postgres.ApprovalRequest, requested event.Envelope) error {
+	s.requestCalls++
+	s.requested = request
+	s.requestedEvent = requested
+	return nil
+}
+
 func TestEngineToolDecisionDefaultsToDeny(t *testing.T) {
 	if got := (Engine{}).toolDecision(tool.Spec{Authority: tool.AuthorityRead}); got != policy.DecisionDeny {
 		t.Errorf("toolDecision() = %q, want %q", got, policy.DecisionDeny)
@@ -786,17 +807,16 @@ func TestEngineExecuteRequestsApprovalWithoutExecutingTool(t *testing.T) {
 	}
 
 	call := tool.Call{ID: "call_credit", Name: "issue_credit", Arguments: json.RawMessage(`{"amount_cents":500}`)}
-	client := model.NewScriptedClient(
-		model.Response{ToolCalls: []tool.Call{call}},
-		model.Response{Text: "A support credit requires human approval."},
-	)
+	client := model.NewScriptedClient(model.Response{ToolCalls: []tool.Call{call}})
 	events := event.NewLog()
+	approvalStore := &approvalStoreStub{findErr: postgres.ErrApprovalRequestNotFound}
 	r := run.New("run-123")
 	engine := Engine{
 		Client:       client,
 		Events:       events,
 		Tools:        registry,
 		ToolPolicy:   approvalRequiredPolicy{},
+		Approvals:    &ApprovalGate{Store: approvalStore},
 		MaxSteps:     2,
 		ModelTimeout: time.Second,
 		ToolTimeout:  time.Second,
@@ -805,22 +825,28 @@ func TestEngineExecuteRequestsApprovalWithoutExecutingTool(t *testing.T) {
 	response, err := engine.Execute(context.Background(), &r, model.Request{
 		Tools: []tool.Spec{executable.Spec()},
 	})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
+	if !errors.Is(err, ErrApprovalPending) {
+		t.Fatalf("Execute() error = %v, want %v", err, ErrApprovalPending)
 	}
-	if response.Text != "A support credit requires human approval." {
-		t.Errorf("response text = %q, want final response", response.Text)
+	if len(response.ToolCalls) != 1 || response.ToolCalls[0].ID != call.ID {
+		t.Errorf("response = %#v, want suspended tool proposal", response)
 	}
 	if executable.calls != 0 {
 		t.Errorf("tool calls = %d, want 0", executable.calls)
 	}
+	if r.Status != run.StatusWaiting {
+		t.Errorf("run status = %q, want %q", r.Status, run.StatusWaiting)
+	}
 
 	requests := client.Requests()
-	if len(requests) != 2 {
-		t.Fatalf("model requests = %d, want 2", len(requests))
+	if len(requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(requests))
 	}
-	if got := requests[1].Messages[1]; got.Role != model.RoleTool || got.Content != approvalRequiredToolResult {
-		t.Errorf("approval tool message = %#v, want approval requirement", got)
+	if approvalStore.requestCalls != 1 {
+		t.Fatalf("approval request calls = %d, want 1", approvalStore.requestCalls)
+	}
+	if approvalStore.requested.ID != "approval/run-123/tool/1/call_credit" || approvalStore.requested.RunID != r.ID || approvalStore.requested.StepKey != run.StepKey("tool/1/call_credit") || approvalStore.requested.CallID != call.ID || approvalStore.requested.ToolName != call.Name {
+		t.Errorf("approval request = %#v, want stable run and tool identity", approvalStore.requested)
 	}
 
 	assertEventTypes(t, events.Events(),
@@ -828,9 +854,6 @@ func TestEngineExecuteRequestsApprovalWithoutExecutingTool(t *testing.T) {
 		event.TypeModelRequested,
 		event.TypeModelCompleted,
 		event.TypeApprovalRequested,
-		event.TypeModelRequested,
-		event.TypeModelCompleted,
-		event.TypeWorkflowCompleted,
 	)
 
 	var payload event.ToolPayload

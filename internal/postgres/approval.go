@@ -48,6 +48,13 @@ type ApprovalRequest struct {
 	ToolName string
 }
 
+type ApprovalRequestRecord struct {
+	ApprovalRequest
+	Status      ApprovalStatus
+	RequestedAt time.Time
+	ResolvedAt  *time.Time
+}
+
 type ApprovalDecision string
 
 const (
@@ -60,6 +67,33 @@ type ApprovalSignal struct {
 	RequestID string
 	RunID     run.ID
 	Decision  ApprovalDecision
+}
+
+func (s *Store) FindApprovalRequest(ctx context.Context, requestID string) (ApprovalRequestRecord, error) {
+	var record ApprovalRequestRecord
+	if err := s.pool.QueryRow(
+		ctx,
+		`SELECT id, run_id, step_key, call_id, tool_name, status, requested_at, resolved_at
+		 FROM approval_requests
+		 WHERE id = $1`,
+		requestID,
+	).Scan(
+		&record.ID,
+		&record.RunID,
+		&record.StepKey,
+		&record.CallID,
+		&record.ToolName,
+		&record.Status,
+		&record.RequestedAt,
+		&record.ResolvedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ApprovalRequestRecord{}, ErrApprovalRequestNotFound
+		}
+		return ApprovalRequestRecord{}, fmt.Errorf("find approval request: %w", err)
+	}
+
+	return record, nil
 }
 
 func (s *Store) RequestApproval(ctx context.Context, r run.Run, request ApprovalRequest, requested event.Envelope) error {

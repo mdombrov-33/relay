@@ -22,13 +22,15 @@ var (
 	ErrInvalidToolTimeout      = errors.New("tool timeout must be positive")
 	ErrEventsNotConfigured     = errors.New("event log not configured")
 	ErrCompactionNotConfigured = errors.New("compaction planner and summary step must be configured together")
+	ErrApprovalsNotConfigured  = errors.New("durable approval gate not configured")
+	ErrApprovalPending         = errors.New("workflow is waiting for approval")
 )
 
 const (
 	workflowStepKey            run.StepKey = "workflow"
 	DefaultContextBudgetBytes              = 16 * 1024
 	deniedToolResult                       = "tool call denied by policy"
-	approvalRequiredToolResult             = "tool call requires approval"
+	approvalRejectedToolResult             = "tool call rejected by human reviewer"
 )
 
 type ToolPolicy interface {
@@ -45,6 +47,7 @@ type Engine struct {
 	ToolTimeout        time.Duration
 	ContextBudgetBytes int
 	Checkpoints        *StepRunner
+	Approvals          *ApprovalGate
 	Compaction         *CompactionPlanner
 	Summary            *SummaryStep
 }
@@ -256,16 +259,42 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			switch e.toolDecision(spec) {
 			case policy.DecisionAllow:
 			case policy.DecisionRequireApproval:
-				if err := e.record(r, toolStepKey, event.TypeApprovalRequested, payload); err != nil {
-					return model.Response{}, err
-				}
-				history = append(history, model.NewToolMessage(tool.Result{
-					CallID:   call.ID,
-					ToolName: call.Name,
-					Content:  approvalRequiredToolResult,
-				}))
+				if e.Approvals == nil {
+					if failErr := r.Fail(); failErr != nil {
+						return model.Response{}, fmt.Errorf("fail run without approval gate: %w", failErr)
+					}
+					if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+						return model.Response{}, recordErr
+					}
 
-				continue
+					return model.Response{}, fmt.Errorf("evaluate approval: %w", ErrApprovalsNotConfigured)
+				}
+				approvalState, err := e.Approvals.Evaluate(ctx, r, toolStepKey, call, e.Events)
+				if err != nil {
+					if failErr := r.Fail(); failErr != nil {
+						return model.Response{}, fmt.Errorf("fail run after approval error: %w", failErr)
+					}
+					if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+						return model.Response{}, recordErr
+					}
+
+					return model.Response{}, fmt.Errorf("evaluate approval: %w", err)
+				}
+				switch approvalState {
+				case ApprovalStatePending:
+					return response, ErrApprovalPending
+				case ApprovalStateRejected:
+					history = append(history, model.NewToolMessage(tool.Result{
+						CallID:   call.ID,
+						ToolName: call.Name,
+						Content:  approvalRejectedToolResult,
+					}))
+
+					continue
+				case ApprovalStateApproved:
+				default:
+					return model.Response{}, fmt.Errorf("approval state %q: %w", approvalState, ErrUnexpectedApprovalStatus)
+				}
 			default:
 				if err := e.record(r, toolStepKey, event.TypeToolDenied, payload); err != nil {
 					return model.Response{}, err
