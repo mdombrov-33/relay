@@ -2,8 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,14 +17,20 @@ import (
 	"github.com/mdombrov-33/relay/internal/run"
 )
 
-type runReader interface {
+const maxCommandBodyBytes = 8 << 10
+
+type store interface {
 	FindRun(ctx context.Context, runID run.ID) (postgres.RunRecord, error)
+	FindApprovalRequest(ctx context.Context, requestID string) (postgres.ApprovalRequestRecord, error)
 	ListRunEvents(ctx context.Context, runID run.ID, afterSequence int64) ([]event.Stored, error)
+	ResolveApproval(ctx context.Context, signal postgres.ApprovalSignal, resolved event.Envelope) (bool, error)
 }
 
 type Handler struct {
-	store runReader
+	store store
 	mux   *http.ServeMux
+	now   func() time.Time
+	newID func(string) (string, error)
 }
 
 type runResponse struct {
@@ -58,10 +68,25 @@ type eventResponse struct {
 	Payload    json.RawMessage `json:"payload"`
 }
 
-func NewHandler(store runReader) http.Handler {
-	h := &Handler{store: store, mux: http.NewServeMux()}
+type approvalCommand struct {
+	RequestID string                    `json:"requestId"`
+	Decision  postgres.ApprovalDecision `json:"decision"`
+}
+
+type approvalCommandResponse struct {
+	RequestID string                    `json:"requestId"`
+	Decision  postgres.ApprovalDecision `json:"decision"`
+}
+
+func NewHandler(store store) http.Handler {
+	return newHandler(store, func() time.Time { return time.Now().UTC() }, randomID)
+}
+
+func newHandler(store store, now func() time.Time, newID func(string) (string, error)) http.Handler {
+	h := &Handler{store: store, mux: http.NewServeMux(), now: now, newID: newID}
 	h.mux.HandleFunc("GET /v1/runs/{id}", h.getRun)
 	h.mux.HandleFunc("GET /v1/runs/{id}/events", h.getRunEvents)
+	h.mux.HandleFunc("POST /v1/runs/{id}/signals/approval", h.resolveApproval)
 	return h
 }
 
@@ -140,6 +165,101 @@ func (h *Handler) getRunEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) resolveApproval(w http.ResponseWriter, r *http.Request) {
+	var command approvalCommand
+	if err := decodeCommand(w, r, &command); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid approval command"})
+		return
+	}
+	if command.RequestID == "" || command.Decision != postgres.ApprovalDecisionApproved && command.Decision != postgres.ApprovalDecisionRejected {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "requestId and an approved or rejected decision are required"})
+		return
+	}
+
+	runID := run.ID(r.PathValue("id"))
+	request, err := h.store.FindApprovalRequest(r.Context(), command.RequestID)
+	if err != nil {
+		h.writeApprovalError(w, err)
+		return
+	}
+	if request.RunID != runID {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "approval request not found"})
+		return
+	}
+
+	signalID, err := h.newID("signal")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+	eventID, err := h.newID("event")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	signal := postgres.ApprovalSignal{
+		ID:        signalID,
+		RequestID: command.RequestID,
+		RunID:     runID,
+		Decision:  command.Decision,
+	}
+	resolved, err := event.New(
+		eventID,
+		runID,
+		request.StepKey,
+		event.TypeApprovalResolved,
+		h.now(),
+		event.ApprovalPayload{
+			RequestID: command.RequestID,
+			Approved:  command.Decision == postgres.ApprovalDecisionApproved,
+		},
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	if _, err := h.store.ResolveApproval(r.Context(), signal, resolved); err != nil {
+		h.writeApprovalError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, approvalCommandResponse(command))
+}
+
+func (h *Handler) writeApprovalError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, postgres.ErrApprovalRequestNotFound), errors.Is(err, postgres.ErrApprovalSignalRunIDMismatch):
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "approval request not found"})
+	case errors.Is(err, postgres.ErrApprovalDecisionConflict):
+		writeJSON(w, http.StatusConflict, errorResponse{Error: "approval decision conflicts with the recorded decision"})
+	default:
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+	}
+}
+
+func decodeCommand(w http.ResponseWriter, r *http.Request, value any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCommandBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
+}
+
+func randomID(prefix string) (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate %s id: %w", prefix, err)
+	}
+	return prefix + "-" + hex.EncodeToString(bytes), nil
 }
 
 func parseAfter(r *http.Request) (int64, error) {

@@ -115,10 +115,14 @@ projection. `internal/httpapi` exposes it through `GET /v1/runs/{id}` with
 stable JSON responses and without leaking storage errors or sensitive payloads.
 `GET /v1/runs/{id}/events?after=N` returns the existing bounded ordered event
 page with an exclusive cursor and a deterministic `nextAfter` value.
+`POST /v1/runs/{id}/signals/approval` accepts an approved or rejected decision,
+derives its step from the durable request, and supplies server-owned signal and
+event identity plus time to the existing atomic resolution transaction. A
+matching duplicate returns the same successful response; a conflict is explicit.
 
-Next: accept an approval decision through HTTP and translate it into the
-existing atomic approval signal transaction without moving event identity or
-time generation into PostgreSQL.
+Next: add durable run cancellation through PostgreSQL and
+`POST /v1/runs/{id}/cancel`, committing the canceled projection and lifecycle
+event together for any nonterminal run.
 
 ## Repository map
 

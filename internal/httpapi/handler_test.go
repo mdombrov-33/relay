@@ -232,16 +232,169 @@ func TestGetRunEventsMapsStoreErrors(t *testing.T) {
 	}
 }
 
+func TestResolveApproval(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	store := &fakeRunReader{
+		approval: postgres.ApprovalRequestRecord{
+			ApprovalRequest: postgres.ApprovalRequest{
+				ID:      "approval-123",
+				RunID:   run.ID("run-123"),
+				StepKey: run.StepKey("tool/1/issue-credit"),
+			},
+		},
+	}
+	ids := []string{"signal-123", "event-123"}
+	handler := newHandler(store, func() time.Time { return now }, func(string) (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	})
+
+	response := serveRequestWithBody(handler, http.MethodPost, "/v1/runs/run-123/signals/approval", `{"requestId":"approval-123","decision":"approved"}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if strings.TrimSpace(response.Body.String()) != `{"requestId":"approval-123","decision":"approved"}` {
+		t.Errorf("body = %q, want stable approval response", strings.TrimSpace(response.Body.String()))
+	}
+	if store.approvalRequestID != "approval-123" {
+		t.Errorf("FindApprovalRequest() request ID = %q, want approval-123", store.approvalRequestID)
+	}
+	if store.signal.ID != "signal-123" || store.signal.RequestID != "approval-123" || store.signal.RunID != run.ID("run-123") || store.signal.Decision != postgres.ApprovalDecisionApproved {
+		t.Errorf("ResolveApproval() signal = %#v, want server-owned approved signal", store.signal)
+	}
+	if store.resolved.ID() != "event-123" || store.resolved.RunID() != run.ID("run-123") || store.resolved.StepKey() != run.StepKey("tool/1/issue-credit") || store.resolved.Type() != event.TypeApprovalResolved || !store.resolved.OccurredAt().Equal(now) {
+		t.Errorf("ResolveApproval() event = %#v, want server-owned resolution event", store.resolved)
+	}
+	var payload event.ApprovalPayload
+	if err := json.Unmarshal(store.resolved.Payload(), &payload); err != nil {
+		t.Fatalf("decode resolved payload: %v", err)
+	}
+	if payload.RequestID != "approval-123" || !payload.Approved {
+		t.Errorf("resolved payload = %#v, want approved request", payload)
+	}
+}
+
+func TestResolveApprovalReturnsSameOutcomeForMatchingDuplicate(t *testing.T) {
+	store := &fakeRunReader{
+		approval: postgres.ApprovalRequestRecord{ApprovalRequest: postgres.ApprovalRequest{
+			ID: "approval-123", RunID: run.ID("run-123"), StepKey: run.StepKey("tool/1"),
+		}},
+		approvalCreated: false,
+	}
+	handler := newHandler(store, time.Now, func(prefix string) (string, error) { return prefix + "-123", nil })
+
+	response := serveRequestWithBody(handler, http.MethodPost, "/v1/runs/run-123/signals/approval", `{"requestId":"approval-123","decision":"rejected"}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if strings.TrimSpace(response.Body.String()) != `{"requestId":"approval-123","decision":"rejected"}` {
+		t.Errorf("body = %q, want original successful outcome", strings.TrimSpace(response.Body.String()))
+	}
+}
+
+func TestResolveApprovalRejectsInvalidCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "empty body", body: ""},
+		{name: "malformed JSON", body: `{"requestId":`},
+		{name: "unknown field", body: `{"requestId":"approval-123","decision":"approved","extra":true}`},
+		{name: "multiple values", body: `{"requestId":"approval-123","decision":"approved"} {}`},
+		{name: "missing request ID", body: `{"decision":"approved"}`},
+		{name: "invalid decision", body: `{"requestId":"approval-123","decision":"deferred"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeRunReader{}
+			response := serveRequestWithBody(NewHandler(store), http.MethodPost, "/v1/runs/run-123/signals/approval", test.body)
+
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", response.Code, http.StatusBadRequest)
+			}
+			if store.approvalFindCalls != 0 || store.approvalResolveCalls != 0 {
+				t.Errorf("approval store calls = (%d find, %d resolve), want none", store.approvalFindCalls, store.approvalResolveCalls)
+			}
+		})
+	}
+}
+
+func TestResolveApprovalMapsErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		store      *fakeRunReader
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "request not found",
+			store:      &fakeRunReader{approvalErr: postgres.ErrApprovalRequestNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error":"approval request not found"}`,
+		},
+		{
+			name: "request belongs to another run",
+			store: &fakeRunReader{approval: postgres.ApprovalRequestRecord{ApprovalRequest: postgres.ApprovalRequest{
+				ID: "approval-123", RunID: run.ID("run-456"), StepKey: run.StepKey("tool/1"),
+			}}},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error":"approval request not found"}`,
+		},
+		{
+			name: "decision conflict",
+			store: &fakeRunReader{
+				approval:           postgres.ApprovalRequestRecord{ApprovalRequest: postgres.ApprovalRequest{ID: "approval-123", RunID: run.ID("run-123"), StepKey: run.StepKey("tool/1")}},
+				approvalResolveErr: postgres.ErrApprovalDecisionConflict,
+			},
+			wantStatus: http.StatusConflict,
+			wantBody:   `{"error":"approval decision conflicts with the recorded decision"}`,
+		},
+		{
+			name:       "store failure",
+			store:      &fakeRunReader{approvalErr: errors.New("password=secret")},
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   `{"error":"internal server error"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := newHandler(test.store, time.Now, func(prefix string) (string, error) { return prefix + "-123", nil })
+			response := serveRequestWithBody(handler, http.MethodPost, "/v1/runs/run-123/signals/approval", `{"requestId":"approval-123","decision":"approved"}`)
+
+			if response.Code != test.wantStatus {
+				t.Errorf("status = %d, want %d", response.Code, test.wantStatus)
+			}
+			if strings.TrimSpace(response.Body.String()) != test.wantBody {
+				t.Errorf("body = %q, want %q", strings.TrimSpace(response.Body.String()), test.wantBody)
+			}
+		})
+	}
+}
+
 type fakeRunReader struct {
-	record      postgres.RunRecord
-	events      []event.Stored
-	err         error
-	eventsErr   error
-	runID       run.ID
-	eventsRunID run.ID
-	after       int64
-	findCalls   int
-	eventCalls  int
+	record               postgres.RunRecord
+	events               []event.Stored
+	approval             postgres.ApprovalRequestRecord
+	err                  error
+	eventsErr            error
+	approvalErr          error
+	approvalResolveErr   error
+	approvalCreated      bool
+	runID                run.ID
+	eventsRunID          run.ID
+	approvalRequestID    string
+	signal               postgres.ApprovalSignal
+	resolved             event.Envelope
+	after                int64
+	findCalls            int
+	eventCalls           int
+	approvalFindCalls    int
+	approvalResolveCalls int
 }
 
 func (f *fakeRunReader) FindRun(_ context.Context, runID run.ID) (postgres.RunRecord, error) {
@@ -257,8 +410,25 @@ func (f *fakeRunReader) ListRunEvents(_ context.Context, runID run.ID, after int
 	return f.events, f.eventsErr
 }
 
+func (f *fakeRunReader) FindApprovalRequest(_ context.Context, requestID string) (postgres.ApprovalRequestRecord, error) {
+	f.approvalFindCalls++
+	f.approvalRequestID = requestID
+	return f.approval, f.approvalErr
+}
+
+func (f *fakeRunReader) ResolveApproval(_ context.Context, signal postgres.ApprovalSignal, resolved event.Envelope) (bool, error) {
+	f.approvalResolveCalls++
+	f.signal = signal
+	f.resolved = resolved
+	return f.approvalCreated, f.approvalResolveErr
+}
+
 func serveRequest(handler http.Handler, method, path string) *httptest.ResponseRecorder {
-	request := httptest.NewRequestWithContext(context.Background(), method, path, nil)
+	return serveRequestWithBody(handler, method, path, "")
+}
+
+func serveRequestWithBody(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequestWithContext(context.Background(), method, path, strings.NewReader(body))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
