@@ -657,6 +657,171 @@ func TestStoreRecoverStepReturnsCompletedCheckpointAfterPoolRestart(t *testing.T
 	}
 }
 
+func TestEffectsProjectionInvariants(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "effect")
+	recordedAt := time.Now().UTC()
+	if _, err := pool.Exec(
+		ctx,
+		`INSERT INTO effects (idempotency_key, run_id, step_key, effect_type, result, recorded_at)
+		 VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+		"effect-key-"+string(r.ID),
+		r.ID,
+		run.StepKey("tool/1/issue-credit"),
+		"issue_credit",
+		`{"credit_id":"credit-123"}`,
+		recordedAt,
+	); err != nil {
+		t.Fatalf("insert effect: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{
+			name: "duplicate idempotency key",
+			query: `INSERT INTO effects (idempotency_key, run_id, step_key, effect_type, result, recorded_at)
+				VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+			args: []any{"effect-key-" + string(r.ID), r.ID, run.StepKey("tool/2/issue-credit"), "issue_credit", `{"credit_id":"credit-456"}`, recordedAt},
+		},
+		{
+			name: "empty idempotency key",
+			query: `INSERT INTO effects (idempotency_key, run_id, step_key, effect_type, result, recorded_at)
+				VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+			args: []any{"", r.ID, run.StepKey("tool/2/issue-credit"), "issue_credit", `{"credit_id":"credit-456"}`, recordedAt},
+		},
+		{
+			name: "missing run",
+			query: `INSERT INTO effects (idempotency_key, run_id, step_key, effect_type, result, recorded_at)
+				VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+			args: []any{"missing-run-key", run.ID("missing-run"), run.StepKey("tool/2/issue-credit"), "issue_credit", `{"credit_id":"credit-456"}`, recordedAt},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, test.query, test.args...); err == nil {
+				t.Fatal("Exec() error = nil, want schema constraint violation")
+			}
+		})
+	}
+}
+
+func TestStoreRecordEffectReturnsRecordedEffectForDuplicateKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "record-effect")
+	store := NewStore(pool)
+	recordedAt := time.Now().UTC()
+	effect := Effect{
+		IdempotencyKey: "issue-credit-" + string(r.ID),
+		RunID:          r.ID,
+		StepKey:        run.StepKey("tool/1/issue-credit"),
+		Type:           EffectType("issue_credit"),
+		Result:         json.RawMessage(`{"credit_id":"credit-123"}`),
+		RecordedAt:     recordedAt,
+	}
+
+	first, created, err := store.RecordEffect(ctx, effect)
+	if err != nil {
+		t.Fatalf("RecordEffect() first error = %v", err)
+	}
+	if !created || first.IdempotencyKey != effect.IdempotencyKey || string(first.Result) != `{"credit_id": "credit-123"}` || !first.RecordedAt.Equal(recordedAt) {
+		t.Fatalf("RecordEffect() first = %#v, created %t, want stored effect", first, created)
+	}
+
+	effect.Result = json.RawMessage(`{"credit_id":"credit-456"}`)
+	effect.RecordedAt = recordedAt.Add(time.Second)
+	duplicate, created, err := store.RecordEffect(ctx, effect)
+	if err != nil {
+		t.Fatalf("RecordEffect() duplicate error = %v", err)
+	}
+	if created || duplicate.IdempotencyKey != first.IdempotencyKey || string(duplicate.Result) != string(first.Result) || !duplicate.RecordedAt.Equal(first.RecordedAt) {
+		t.Errorf("RecordEffect() duplicate = %#v, created %t, want original stored effect", duplicate, created)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM effects WHERE idempotency_key = $1", effect.IdempotencyKey).Scan(&count); err != nil {
+		t.Fatalf("count effects: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("effect count = %d, want 1", count)
+	}
+}
+
+func TestStoreRecordEffectRejectsInvalidOrMismatchedIdentity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "record-effect-rejected")
+	store := NewStore(pool)
+	effect := Effect{
+		IdempotencyKey: "issue-credit-" + string(r.ID),
+		RunID:          r.ID,
+		StepKey:        run.StepKey("tool/1/issue-credit"),
+		Type:           EffectType("issue_credit"),
+		Result:         json.RawMessage(`{"credit_id":"credit-123"}`),
+		RecordedAt:     time.Now().UTC(),
+	}
+	if _, _, err := store.RecordEffect(ctx, effect); err != nil {
+		t.Fatalf("RecordEffect() initial error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		effect Effect
+		want   error
+	}{
+		{
+			name: "invalid JSON result",
+			effect: Effect{
+				IdempotencyKey: "invalid-result-" + string(r.ID),
+				RunID:          r.ID,
+				StepKey:        run.StepKey("tool/1/issue-credit"),
+				Type:           EffectType("issue_credit"),
+				Result:         json.RawMessage(`{"credit_id":`),
+				RecordedAt:     effect.RecordedAt,
+			},
+			want: ErrInvalidEffectResult,
+		},
+		{
+			name: "changed step key",
+			effect: Effect{
+				IdempotencyKey: effect.IdempotencyKey,
+				RunID:          effect.RunID,
+				StepKey:        run.StepKey("tool/2/issue-credit"),
+				Type:           effect.Type,
+				Result:         effect.Result,
+				RecordedAt:     effect.RecordedAt,
+			},
+			want: ErrEffectIdentityMismatch,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := store.RecordEffect(ctx, test.effect)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("RecordEffect() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func openIntegrationPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 

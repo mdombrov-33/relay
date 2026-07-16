@@ -50,8 +50,13 @@ serialized tool output. A pool-restart test proves a completed model/tool/model
 sequence returns its durable results without calling the recovered model client
 or tool executable.
 
-Next: add the synthetic effect ledger and Store API keyed by a stable
-idempotency key, preparing a retried external effect to become a no-op.
+The `effects` ledger records one completed synthetic effect for a global stable
+idempotency key. Its Store API returns the original record on a matching
+duplicate and rejects a key reused for a different effect identity. It does not
+hide the crash window before an external effect is recorded.
+
+Next: wire the synthetic `issue_credit` effect through the ledger and prove a
+retry with the same stable key creates one logical credit.
 
 ## Repository map
 
