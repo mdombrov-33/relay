@@ -430,12 +430,13 @@ func TestStoreClaimStepReturnsCompletedCheckpoint(t *testing.T) {
 	inputHash := sha256.Sum256([]byte("model input"))
 	store := NewStore(pool)
 
-	if _, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt); err != nil {
+	claimed, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt)
+	if err != nil {
 		t.Fatalf("ClaimStep() initial error = %v", err)
 	}
 	completedAt := startedAt.Add(time.Second)
 	result := json.RawMessage(`{"response":"cached"}`)
-	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("model/1"), inputHash, result, completedAt); err != nil {
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("model/1"), inputHash, claimed.Attempt, result, completedAt); err != nil {
 		t.Fatalf("CompleteStep() error = %v", err)
 	}
 
@@ -504,21 +505,22 @@ func TestStoreCompleteStep(t *testing.T) {
 	inputHash := sha256.Sum256([]byte("tool input"))
 	store := NewStore(pool)
 
-	if _, err := store.ClaimStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, startedAt); err != nil {
+	claimed, err := store.ClaimStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, startedAt)
+	if err != nil {
 		t.Fatalf("ClaimStep() error = %v", err)
 	}
-	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), sha256.Sum256([]byte("changed tool input")), json.RawMessage(`{"customer":"changed"}`), completedAt); !errors.Is(err, ErrStepNotRunning) {
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), sha256.Sum256([]byte("changed tool input")), claimed.Attempt, json.RawMessage(`{"customer":"changed"}`), completedAt); !errors.Is(err, ErrStepNotRunning) {
 		t.Fatalf("CompleteStep() changed input error = %v, want %v", err, ErrStepNotRunning)
 	}
 
-	checkpoint, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, json.RawMessage(`{"customer":"found"}`), completedAt)
+	checkpoint, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, claimed.Attempt, json.RawMessage(`{"customer":"found"}`), completedAt)
 	if err != nil {
 		t.Fatalf("CompleteStep() error = %v", err)
 	}
 	if checkpoint.Status != StepStatusCompleted || string(checkpoint.Result) != `{"customer": "found"}` || checkpoint.CompletedAt == nil || !checkpoint.CompletedAt.Equal(completedAt) {
 		t.Errorf("CompleteStep() = %#v, want completed checkpoint", checkpoint)
 	}
-	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, json.RawMessage(`{"customer":"changed"}`), completedAt.Add(time.Second)); !errors.Is(err, ErrStepNotRunning) {
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, claimed.Attempt, json.RawMessage(`{"customer":"changed"}`), completedAt.Add(time.Second)); !errors.Is(err, ErrStepNotRunning) {
 		t.Errorf("CompleteStep() duplicate error = %v, want %v", err, ErrStepNotRunning)
 	}
 }
@@ -554,11 +556,104 @@ func TestStoreCompleteStepRejectsInvalidStateOrResult(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, test.result, startedAt.Add(time.Second))
+			_, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, 1, test.result, startedAt.Add(time.Second))
 			if !errors.Is(err, test.want) {
 				t.Fatalf("CompleteStep() error = %v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestStoreRecoverStepStartsNewAttempt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "recovered")
+	startedAt := time.Now().UTC()
+	recoveredAt := startedAt.Add(time.Second)
+	inputHash := sha256.Sum256([]byte("tool input"))
+	store := NewStore(pool)
+
+	claimed, err := store.ClaimStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, startedAt)
+	if err != nil {
+		t.Fatalf("ClaimStep() error = %v", err)
+	}
+
+	recovered, err := store.RecoverStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, recoveredAt)
+	if err != nil {
+		t.Fatalf("RecoverStep() error = %v", err)
+	}
+	if recovered.Attempt != claimed.Attempt+1 || recovered.Status != StepStatusRunning || !recovered.StartedAt.Equal(recoveredAt) || recovered.CompletedAt != nil {
+		t.Errorf("RecoverStep() = %#v, want second running attempt", recovered)
+	}
+
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, claimed.Attempt, json.RawMessage(`{"customer":"stale"}`), recoveredAt.Add(time.Second)); !errors.Is(err, ErrStepNotRunning) {
+		t.Fatalf("CompleteStep() stale attempt error = %v, want %v", err, ErrStepNotRunning)
+	}
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, recovered.Attempt, json.RawMessage(`{"customer":"found"}`), recoveredAt.Add(time.Second)); err != nil {
+		t.Fatalf("CompleteStep() recovered attempt error = %v", err)
+	}
+}
+
+func TestStoreRecoverStepRejectsMissingOrChangedInput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "recover-rejected")
+	startedAt := time.Now().UTC()
+	inputHash := sha256.Sum256([]byte("model input"))
+	store := NewStore(pool)
+
+	if _, err := store.RecoverStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt); !errors.Is(err, ErrStepNotFound) {
+		t.Fatalf("RecoverStep() missing error = %v, want %v", err, ErrStepNotFound)
+	}
+	if _, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt); err != nil {
+		t.Fatalf("ClaimStep() error = %v", err)
+	}
+	if _, err := store.RecoverStep(ctx, r.ID, run.StepKey("model/1"), sha256.Sum256([]byte("changed model input")), startedAt.Add(time.Second)); !errors.Is(err, ErrStepInputMismatch) {
+		t.Fatalf("RecoverStep() changed input error = %v, want %v", err, ErrStepInputMismatch)
+	}
+}
+
+func TestStoreRecoverStepReturnsCompletedCheckpointAfterPoolRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	startedAt := time.Now().UTC()
+	completedAt := startedAt.Add(time.Second)
+	inputHash := sha256.Sum256([]byte("model input"))
+	var r run.Run
+
+	func() {
+		writerPool := openIntegrationPool(t, ctx)
+		defer writerPool.Close()
+
+		r = pendingIntegrationRun(t, writerPool, ctx, "recovered-completed")
+		store := NewStore(writerPool)
+		claimed, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt)
+		if err != nil {
+			t.Fatalf("ClaimStep() error = %v", err)
+		}
+		if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("model/1"), inputHash, claimed.Attempt, json.RawMessage(`{"response":"cached"}`), completedAt); err != nil {
+			t.Fatalf("CompleteStep() error = %v", err)
+		}
+	}()
+
+	readerPool := openIntegrationPool(t, ctx)
+	defer readerPool.Close()
+
+	checkpoint, err := NewStore(readerPool).RecoverStep(ctx, r.ID, run.StepKey("model/1"), inputHash, completedAt.Add(time.Second))
+	if err != nil {
+		t.Fatalf("RecoverStep() error = %v", err)
+	}
+	if checkpoint.Attempt != 1 || checkpoint.Status != StepStatusCompleted || string(checkpoint.Result) != `{"response": "cached"}` || checkpoint.CompletedAt == nil || !checkpoint.CompletedAt.Equal(completedAt) {
+		t.Errorf("RecoverStep() = %#v, want persisted completed checkpoint", checkpoint)
 	}
 }
 

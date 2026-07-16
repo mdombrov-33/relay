@@ -16,6 +16,7 @@ import (
 var (
 	ErrStepAlreadyRunning = errors.New("step is already running")
 	ErrStepInputMismatch  = errors.New("step input hash does not match checkpoint")
+	ErrStepNotFound       = errors.New("step checkpoint was not found")
 	ErrStepNotRunning     = errors.New("step is not running")
 	ErrInvalidStepResult  = errors.New("step result must be valid JSON")
 )
@@ -73,7 +74,44 @@ func (s *Store) ClaimStep(ctx context.Context, runID run.ID, stepKey run.StepKey
 	return StepCheckpoint{}, ErrStepAlreadyRunning
 }
 
-func (s *Store) CompleteStep(ctx context.Context, runID run.ID, stepKey run.StepKey, inputHash [sha256.Size]byte, result json.RawMessage, completedAt time.Time) (StepCheckpoint, error) {
+func (s *Store) RecoverStep(ctx context.Context, runID run.ID, stepKey run.StepKey, inputHash [sha256.Size]byte, startedAt time.Time) (StepCheckpoint, error) {
+	checkpoint, err := scanStep(s.pool.QueryRow(
+		ctx,
+		`UPDATE steps
+		 SET attempt = attempt + 1, started_at = $4
+		 WHERE run_id = $1 AND step_key = $2 AND input_hash = $3 AND status = $5
+		 RETURNING run_id, step_key, input_hash, attempt, status, result, started_at, completed_at`,
+		runID,
+		stepKey,
+		inputHash[:],
+		startedAt,
+		StepStatusRunning,
+	))
+	if err == nil {
+		return checkpoint, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return StepCheckpoint{}, fmt.Errorf("recover step checkpoint: %w", err)
+	}
+
+	checkpoint, err = s.findStep(ctx, runID, stepKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return StepCheckpoint{}, ErrStepNotFound
+	}
+	if err != nil {
+		return StepCheckpoint{}, err
+	}
+	if checkpoint.InputHash != inputHash {
+		return StepCheckpoint{}, ErrStepInputMismatch
+	}
+	if checkpoint.Status == StepStatusCompleted {
+		return checkpoint, nil
+	}
+
+	return StepCheckpoint{}, ErrStepAlreadyRunning
+}
+
+func (s *Store) CompleteStep(ctx context.Context, runID run.ID, stepKey run.StepKey, inputHash [sha256.Size]byte, attempt int, result json.RawMessage, completedAt time.Time) (StepCheckpoint, error) {
 	if !json.Valid(result) {
 		return StepCheckpoint{}, ErrInvalidStepResult
 	}
@@ -81,12 +119,13 @@ func (s *Store) CompleteStep(ctx context.Context, runID run.ID, stepKey run.Step
 	checkpoint, err := scanStep(s.pool.QueryRow(
 		ctx,
 		`UPDATE steps
-		 SET status = $4, result = $5::jsonb, completed_at = $6
-		 WHERE run_id = $1 AND step_key = $2 AND input_hash = $3 AND status = $7
+		 SET status = $5, result = $6::jsonb, completed_at = $7
+		 WHERE run_id = $1 AND step_key = $2 AND input_hash = $3 AND attempt = $4 AND status = $8
 		 RETURNING run_id, step_key, input_hash, attempt, status, result, started_at, completed_at`,
 		runID,
 		stepKey,
 		inputHash[:],
+		attempt,
 		StepStatusCompleted,
 		string(result),
 		completedAt,

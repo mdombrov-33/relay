@@ -36,11 +36,12 @@ committed run/event history survives reopening a pool.
 
 The `steps` migration and Store API provide a durable, unique checkpoint
 projection keyed by run and step. A matching completed checkpoint returns its
-JSON result; a live duplicate or changed input is rejected. Completion only
-updates the matching running checkpoint.
+JSON result after reopening a pool. Recovery increments a running checkpoint's
+attempt; completion requires that attempt, preventing a stale worker from
+overwriting the current attempt.
 
-Next: add recovery semantics for an interrupted running checkpoint, including a
-new attempt and a restart proof that a completed result is reused.
+Next: add a durable step runner around a real workflow operation so its callback
+executes only on a newly claimed or recovered attempt, never for a cached result.
 
 ## Repository map
 
