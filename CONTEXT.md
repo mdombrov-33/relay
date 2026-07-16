@@ -23,8 +23,8 @@ event timeline.
 
 ## Current phase
 
-Milestones 3 and 4 are complete. Milestone 5, idempotent effects and outbox
-reasoning, is active.
+Milestones 3 through 5 are complete. Milestone 6, bounded context and
+compaction, is active.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
@@ -57,8 +57,13 @@ the original recorded credit on recovery. An integration test interrupts after
 the first credit record but before its tool checkpoint completes, reopens the
 pool, and proves retry completes attempt two with one logical credit.
 
-Next: begin M6 with a pure bounded-context hydrator that preserves pinned input
-and recent messages while separating durable history from model context.
+The pure `workflow.ContextHydrator` builds a new model-message slice from pinned
+input and durable-history candidates. Its explicit serialized-byte budget
+preserves pinned input, retains the newest contiguous whole-message suffix that
+fits, rejects an oversized pinned task, and does not mutate caller-owned data.
+
+Next: wire the bounded-context hydrator into the workflow engine so every model
+turn is rebuilt from pinned input plus in-memory history.
 
 ## Repository map
 
