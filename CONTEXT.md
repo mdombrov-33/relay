@@ -28,11 +28,10 @@ Milestone 3 is active: PostgreSQL event log and run projection.
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
 18 Compose service, a ping-verified `pgx/v5` pool, and a concrete store that
-atomically creates a pending run plus its queued event. `make test-integration`
-connects to the migrated local database.
+atomically creates a pending run or applies a terminal transition with its
+lifecycle event. `make test-integration` connects to the migrated local database.
 
-Next: transactionally persist terminal run transitions with their lifecycle
-events.
+Next: list ordered events by run and global sequence cursor.
 
 ## Repository map
 

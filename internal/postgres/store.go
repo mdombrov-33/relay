@@ -11,9 +11,12 @@ import (
 )
 
 var (
-	ErrRunNotPending       = errors.New("new run must be pending")
-	ErrQueuedEventExpected = errors.New("new run requires a workflow queued event")
-	ErrEventRunIDMismatch  = errors.New("queued event run ID does not match run")
+	ErrRunNotPending         = errors.New("new run must be pending")
+	ErrQueuedEventExpected   = errors.New("new run requires a workflow queued event")
+	ErrEventRunIDMismatch    = errors.New("event run ID does not match run")
+	ErrRunNotTerminal        = errors.New("run must have a terminal status")
+	ErrTerminalEventMismatch = errors.New("terminal event type does not match run status")
+	ErrRunNotRunning         = errors.New("only a running run can transition to a terminal status")
 )
 
 // Store persists Relay run projections and their event history in PostgreSQL.
@@ -79,4 +82,79 @@ func (s *Store) CreateRun(ctx context.Context, r run.Run, queued event.Envelope)
 	}
 
 	return nil
+}
+
+// TransitionToTerminal updates a running run and records its corresponding
+// terminal lifecycle event in one transaction. The status predicate in the
+// update prevents duplicate terminal events when more than one caller tries to
+// complete the same run.
+func (s *Store) TransitionToTerminal(ctx context.Context, r run.Run, terminal event.Envelope) error {
+	expectedType, err := terminalEventType(r.Status)
+	if err != nil {
+		return err
+	}
+	if terminal.Type() != expectedType {
+		return ErrTerminalEventMismatch
+	}
+	if terminal.RunID() != r.ID {
+		return ErrEventRunIDMismatch
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin terminal transition transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	result, err := tx.Exec(
+		ctx,
+		`UPDATE runs
+		 SET status = $2, updated_at = $3
+		 WHERE id = $1 AND status = $4`,
+		r.ID,
+		r.Status,
+		terminal.OccurredAt(),
+		run.StatusRunning,
+	)
+	if err != nil {
+		return fmt.Errorf("update terminal run projection: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return ErrRunNotRunning
+	}
+
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO events (id, run_id, step_key, type, occurred_at, payload)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+		terminal.ID(),
+		terminal.RunID(),
+		terminal.StepKey(),
+		terminal.Type(),
+		terminal.OccurredAt(),
+		string(terminal.Payload()),
+	); err != nil {
+		return fmt.Errorf("insert terminal lifecycle event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit terminal transition transaction: %w", err)
+	}
+
+	return nil
+}
+
+func terminalEventType(status run.Status) (event.Type, error) {
+	switch status {
+	case run.StatusSucceeded:
+		return event.TypeWorkflowCompleted, nil
+	case run.StatusFailed:
+		return event.TypeWorkflowFailed, nil
+	case run.StatusCanceled:
+		return event.TypeWorkflowCancelled, nil
+	default:
+		return "", ErrRunNotTerminal
+	}
 }
