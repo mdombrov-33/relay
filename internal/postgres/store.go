@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/run"
@@ -19,6 +21,7 @@ var (
 	ErrTerminalEventMismatch = errors.New("terminal event type does not match run status")
 	ErrRunNotRunning         = errors.New("only a running run can transition to a terminal status")
 	ErrNegativeEventCursor   = errors.New("event cursor cannot be negative")
+	ErrRunNotFound           = errors.New("run was not found")
 )
 
 const eventPageSize = 100
@@ -27,8 +30,67 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+type RunRecord struct {
+	Run             run.Run
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	PendingApproval *ApprovalRequestRecord
+}
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func (s *Store) FindRun(ctx context.Context, runID run.ID) (RunRecord, error) {
+	var (
+		record              RunRecord
+		approvalID          pgtype.Text
+		approvalStepKey     pgtype.Text
+		approvalCallID      pgtype.Text
+		approvalToolName    pgtype.Text
+		approvalRequestedAt pgtype.Timestamptz
+	)
+	if err := s.pool.QueryRow(
+		ctx,
+		`SELECT r.id, r.status, r.created_at, r.updated_at,
+		        ar.id, ar.step_key, ar.call_id, ar.tool_name, ar.requested_at
+		 FROM runs r
+		 LEFT JOIN approval_requests ar
+		   ON ar.run_id = r.id AND ar.status = 'pending'
+		 WHERE r.id = $1`,
+		runID,
+	).Scan(
+		&record.Run.ID,
+		&record.Run.Status,
+		&record.CreatedAt,
+		&record.UpdatedAt,
+		&approvalID,
+		&approvalStepKey,
+		&approvalCallID,
+		&approvalToolName,
+		&approvalRequestedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RunRecord{}, ErrRunNotFound
+		}
+		return RunRecord{}, fmt.Errorf("find run: %w", err)
+	}
+
+	if approvalID.Valid {
+		record.PendingApproval = &ApprovalRequestRecord{
+			ApprovalRequest: ApprovalRequest{
+				ID:       approvalID.String,
+				RunID:    record.Run.ID,
+				StepKey:  run.StepKey(approvalStepKey.String),
+				CallID:   approvalCallID.String,
+				ToolName: approvalToolName.String,
+			},
+			Status:      ApprovalStatusPending,
+			RequestedAt: approvalRequestedAt.Time,
+		}
+	}
+
+	return record, nil
 }
 
 func (s *Store) CreateRun(ctx context.Context, r run.Run, queued event.Envelope) error {

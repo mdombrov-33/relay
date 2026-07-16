@@ -110,9 +110,12 @@ checkpointed call only after approval, and gives the model a safe rejection
 result without resolving the executable. Integration tests restart while the
 request is pending and again after its signal.
 
-Next: expose durable run and pending-approval projections through the first
-read-only HTTP endpoints, establishing the transport boundary before commands
-and SSE are added.
+The PostgreSQL Store reads one run and its pending approval as a consistent
+projection. `internal/httpapi` exposes it through `GET /v1/runs/{id}` with
+stable JSON responses and without leaking storage errors or sensitive payloads.
+
+Next: expose a run's ordered event page through HTTP with a validated exclusive
+sequence cursor, then move from read-only observation to transport commands.
 
 ## Repository map
 
@@ -124,6 +127,7 @@ internal/event/     immutable safe event envelope and payloads
 internal/model/     provider-independent port and scripted fake
 internal/tool/      tool contract, registry, deterministic lookups
 internal/workflow/  bounded orchestration loop
+internal/httpapi/   HTTP projections and commands
 internal/postgres/  direct PostgreSQL pool and integration test
 migrations/         Goose PostgreSQL schema migrations
 ```

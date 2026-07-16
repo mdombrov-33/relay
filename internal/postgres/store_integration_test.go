@@ -138,6 +138,53 @@ func TestStorePersistsRunAndEventAcrossPoolRestart(t *testing.T) {
 	}
 }
 
+func TestStoreFindRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	store := NewStore(pool)
+	pending := pendingIntegrationRun(t, pool, ctx, "find-pending")
+	pendingRecord, err := store.FindRun(ctx, pending.ID)
+	if err != nil {
+		t.Fatalf("FindRun() pending error = %v", err)
+	}
+	if pendingRecord.Run != pending || pendingRecord.PendingApproval != nil {
+		t.Errorf("FindRun() pending = %#v, want pending run without approval", pendingRecord)
+	}
+	if pendingRecord.CreatedAt.IsZero() || pendingRecord.UpdatedAt.IsZero() {
+		t.Errorf("FindRun() timestamps = (%s, %s), want persisted timestamps", pendingRecord.CreatedAt, pendingRecord.UpdatedAt)
+	}
+
+	waiting, request := waitingApprovalIntegrationRun(t, pool, ctx, "find-waiting")
+	waitingRecord, err := store.FindRun(ctx, waiting.ID)
+	if err != nil {
+		t.Fatalf("FindRun() waiting error = %v", err)
+	}
+	if waitingRecord.Run.ID != waiting.ID || waitingRecord.Run.Status != run.StatusWaiting {
+		t.Errorf("FindRun() run = %#v, want waiting run %q", waitingRecord.Run, waiting.ID)
+	}
+	if waitingRecord.PendingApproval == nil {
+		t.Fatal("FindRun() pending approval = nil, want approval")
+	}
+	if *waitingRecord.PendingApproval != (ApprovalRequestRecord{
+		ApprovalRequest: request,
+		Status:          ApprovalStatusPending,
+		RequestedAt:     waitingRecord.PendingApproval.RequestedAt,
+	}) {
+		t.Errorf("FindRun() pending approval = %#v, want request %#v", waitingRecord.PendingApproval, request)
+	}
+	if waitingRecord.PendingApproval.RequestedAt.IsZero() {
+		t.Error("FindRun() approval requested at is zero")
+	}
+
+	if _, err := store.FindRun(ctx, run.ID("missing-run")); !errors.Is(err, ErrRunNotFound) {
+		t.Errorf("FindRun() missing error = %v, want %v", err, ErrRunNotFound)
+	}
+}
+
 func TestStoreTransitionToTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
