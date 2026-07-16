@@ -134,15 +134,21 @@ projection without starting workflow execution in the request.
 Each frame uses the database sequence as its SSE ID and includes the stable safe
 event JSON; polling stops when the request context is canceled, and reconnects
 resume strictly after the supplied cursor.
+`cmd/api` is the runnable composition root. It validates configuration, opens
+and pings PostgreSQL under a startup timeout, serves `internal/httpapi` on
+`127.0.0.1:4000` by default, bounds reads and headers while leaving long-lived
+SSE writes compatible, and drains through a bounded signal-driven shutdown.
 
-Next: add a configured HTTP server entry point that opens the PostgreSQL pool,
-serves `internal/httpapi`, and shuts down cleanly. The inspector needs a real
-runnable transport rather than a handler that is reachable only from tests.
+Next: build the minimal inspector over the public HTTP and SSE contracts. Keep
+it a projection of durable state: create/select a run, render status and the
+ordered safe event timeline, show pending approval, and submit approval or
+cancellation commands without inventing client-owned workflow state.
 
 ## Repository map
 
 ```text
 cmd/relay/          deterministic in-memory workflow demo
+cmd/api/            configured HTTP/SSE server and graceful shutdown
 cmd/relayctl/       read-only PostgreSQL event inspection command
 internal/run/       run identity, status, guarded transitions
 internal/event/     immutable safe event envelope and payloads
@@ -170,6 +176,7 @@ migrations/         Goose PostgreSQL schema migrations
 ## Local commands
 
 - Demo: `go run ./cmd/relay`
+- API: `make api` (override with `ARGS='-addr 127.0.0.1:5000'`)
 - Event inspection: `make relayctl ARGS='events'`
 - Unit tests: `make test`
 - Full gate: `make check`
