@@ -21,6 +21,7 @@ const maxCommandBodyBytes = 8 << 10
 
 type store interface {
 	CancelRun(ctx context.Context, runID run.ID, canceled event.Envelope) error
+	CreateRun(ctx context.Context, r run.Run, queued event.Envelope) error
 	FindRun(ctx context.Context, runID run.ID) (postgres.RunRecord, error)
 	FindApprovalRequest(ctx context.Context, requestID string) (postgres.ApprovalRequestRecord, error)
 	ListRunEvents(ctx context.Context, runID run.ID, afterSequence int64) ([]event.Stored, error)
@@ -84,12 +85,18 @@ type cancellationResponse struct {
 	Status run.Status `json:"status"`
 }
 
+type creationResponse struct {
+	ID     run.ID     `json:"id"`
+	Status run.Status `json:"status"`
+}
+
 func NewHandler(store store) http.Handler {
 	return newHandler(store, func() time.Time { return time.Now().UTC() }, randomID)
 }
 
 func newHandler(store store, now func() time.Time, newID func(string) (string, error)) http.Handler {
 	h := &Handler{store: store, mux: http.NewServeMux(), now: now, newID: newID}
+	h.mux.HandleFunc("POST /v1/runs", h.createRun)
 	h.mux.HandleFunc("GET /v1/runs/{id}", h.getRun)
 	h.mux.HandleFunc("POST /v1/runs/{id}/cancel", h.cancelRun)
 	h.mux.HandleFunc("GET /v1/runs/{id}/events", h.getRunEvents)
@@ -99,6 +106,42 @@ func newHandler(store store, now func() time.Time, newID func(string) (string, e
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
+}
+
+func (h *Handler) createRun(w http.ResponseWriter, r *http.Request) {
+	runIDValue, err := h.newID("run")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+	eventID, err := h.newID("event")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	createdAt := h.now()
+	createdRun := run.New(run.ID(runIDValue))
+	queued, err := event.New(
+		eventID,
+		createdRun.ID,
+		run.StepKey("workflow"),
+		event.TypeWorkflowQueued,
+		createdAt,
+		event.LifecyclePayload{Status: createdRun.Status},
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	if err := h.store.CreateRun(r.Context(), createdRun, queued); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	w.Header().Set("Location", "/v1/runs/"+runIDValue)
+	writeJSON(w, http.StatusCreated, creationResponse{ID: createdRun.ID, Status: createdRun.Status})
 }
 
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {

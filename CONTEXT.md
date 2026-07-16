@@ -127,9 +127,13 @@ matching duplicate returns the same successful response; a conflict is explicit.
 `POST /v1/runs/{id}/cancel` supplies a server-owned lifecycle event to the
 atomic cancellation transaction, returns not found for a missing run, and
 rejects an already-terminal run as a conflict.
+`POST /v1/runs` creates a durable pending run and its queued lifecycle event
+atomically with server-owned run/event identity and time. It returns the new
+projection without starting workflow execution in the request.
 
-Next: add `POST /v1/runs` so an operator can create a durable pending run and
-its queued lifecycle event without direct database access.
+Next: stream the global ordered event log through
+`GET /v1/events/stream?after=N`, using the database sequence as an exclusive
+reconnect cursor and stopping promptly when the request context is canceled.
 
 ## Repository map
 

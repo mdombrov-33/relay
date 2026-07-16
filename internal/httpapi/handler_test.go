@@ -63,6 +63,85 @@ func TestGetRun(t *testing.T) {
 	}
 }
 
+func TestCreateRun(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 15, 0, 0, 0, time.UTC)
+	store := &fakeRunReader{}
+	ids := []string{"run-123", "event-123"}
+	handler := newHandler(store, func() time.Time { return now }, func(string) (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	})
+
+	response := serveRequest(handler, http.MethodPost, "/v1/runs")
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if response.Header().Get("Location") != "/v1/runs/run-123" {
+		t.Errorf("Location = %q, want /v1/runs/run-123", response.Header().Get("Location"))
+	}
+	if strings.TrimSpace(response.Body.String()) != `{"id":"run-123","status":"pending"}` {
+		t.Errorf("body = %q, want pending run", strings.TrimSpace(response.Body.String()))
+	}
+	if store.createdRun != (run.Run{ID: run.ID("run-123"), Status: run.StatusPending}) {
+		t.Errorf("CreateRun() run = %#v, want pending run-123", store.createdRun)
+	}
+	if store.queued.ID() != "event-123" || store.queued.RunID() != run.ID("run-123") || store.queued.StepKey() != run.StepKey("workflow") || store.queued.Type() != event.TypeWorkflowQueued || !store.queued.OccurredAt().Equal(now) {
+		t.Errorf("CreateRun() event = %#v, want server-owned queued event", store.queued)
+	}
+	var payload event.LifecyclePayload
+	if err := json.Unmarshal(store.queued.Payload(), &payload); err != nil {
+		t.Fatalf("decode queued payload: %v", err)
+	}
+	if payload.Status != run.StatusPending {
+		t.Errorf("queued payload status = %q, want %q", payload.Status, run.StatusPending)
+	}
+}
+
+func TestCreateRunMapsFailures(t *testing.T) {
+	tests := []struct {
+		name  string
+		store *fakeRunReader
+		newID func(string) (string, error)
+	}{
+		{
+			name:  "run ID generation",
+			store: &fakeRunReader{},
+			newID: func(string) (string, error) { return "", errors.New("random source failed") },
+		},
+		{
+			name:  "event ID generation",
+			store: &fakeRunReader{},
+			newID: func(prefix string) (string, error) {
+				if prefix == "run" {
+					return "run-123", nil
+				}
+				return "", errors.New("random source failed")
+			},
+		},
+		{
+			name:  "store failure",
+			store: &fakeRunReader{createErr: errors.New("password=secret")},
+			newID: func(prefix string) (string, error) { return prefix + "-123", nil },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := newHandler(test.store, time.Now, test.newID)
+			response := serveRequest(handler, http.MethodPost, "/v1/runs")
+
+			if response.Code != http.StatusInternalServerError {
+				t.Errorf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+			}
+			if strings.TrimSpace(response.Body.String()) != `{"error":"internal server error"}` {
+				t.Errorf("body = %q, want generic error", strings.TrimSpace(response.Body.String()))
+			}
+		})
+	}
+}
+
 func TestGetRunOmitsPendingApproval(t *testing.T) {
 	store := &fakeRunReader{record: postgres.RunRecord{Run: run.Run{ID: run.ID("run-123"), Status: run.StatusRunning}}}
 
@@ -441,6 +520,7 @@ type fakeRunReader struct {
 	approvalErr          error
 	approvalResolveErr   error
 	cancelErr            error
+	createErr            error
 	approvalCreated      bool
 	runID                run.ID
 	eventsRunID          run.ID
@@ -449,12 +529,15 @@ type fakeRunReader struct {
 	resolved             event.Envelope
 	canceledRunID        run.ID
 	canceled             event.Envelope
+	createdRun           run.Run
+	queued               event.Envelope
 	after                int64
 	findCalls            int
 	eventCalls           int
 	approvalFindCalls    int
 	approvalResolveCalls int
 	cancelCalls          int
+	createCalls          int
 }
 
 func (f *fakeRunReader) CancelRun(_ context.Context, runID run.ID, canceled event.Envelope) error {
@@ -462,6 +545,13 @@ func (f *fakeRunReader) CancelRun(_ context.Context, runID run.ID, canceled even
 	f.canceledRunID = runID
 	f.canceled = canceled
 	return f.cancelErr
+}
+
+func (f *fakeRunReader) CreateRun(_ context.Context, r run.Run, queued event.Envelope) error {
+	f.createCalls++
+	f.createdRun = r
+	f.queued = queued
+	return f.createErr
 }
 
 func (f *fakeRunReader) FindRun(_ context.Context, runID run.ID) (postgres.RunRecord, error) {
