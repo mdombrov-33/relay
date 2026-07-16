@@ -19,11 +19,14 @@ import (
 
 const maxCommandBodyBytes = 8 << 10
 
+const eventPollInterval = time.Second
+
 type store interface {
 	CancelRun(ctx context.Context, runID run.ID, canceled event.Envelope) error
 	CreateRun(ctx context.Context, r run.Run, queued event.Envelope) error
 	FindRun(ctx context.Context, runID run.ID) (postgres.RunRecord, error)
 	FindApprovalRequest(ctx context.Context, requestID string) (postgres.ApprovalRequestRecord, error)
+	ListEventsAfter(ctx context.Context, afterSequence int64) ([]event.Stored, error)
 	ListRunEvents(ctx context.Context, runID run.ID, afterSequence int64) ([]event.Stored, error)
 	ResolveApproval(ctx context.Context, signal postgres.ApprovalSignal, resolved event.Envelope) (bool, error)
 }
@@ -33,6 +36,7 @@ type Handler struct {
 	mux   *http.ServeMux
 	now   func() time.Time
 	newID func(string) (string, error)
+	wait  func(context.Context) error
 }
 
 type runResponse struct {
@@ -95,8 +99,13 @@ func NewHandler(store store) http.Handler {
 }
 
 func newHandler(store store, now func() time.Time, newID func(string) (string, error)) http.Handler {
-	h := &Handler{store: store, mux: http.NewServeMux(), now: now, newID: newID}
+	return newHandlerWithWait(store, now, newID, waitForEvents)
+}
+
+func newHandlerWithWait(store store, now func() time.Time, newID func(string) (string, error), wait func(context.Context) error) http.Handler {
+	h := &Handler{store: store, mux: http.NewServeMux(), now: now, newID: newID, wait: wait}
 	h.mux.HandleFunc("POST /v1/runs", h.createRun)
+	h.mux.HandleFunc("GET /v1/events/stream", h.streamEvents)
 	h.mux.HandleFunc("GET /v1/runs/{id}", h.getRun)
 	h.mux.HandleFunc("POST /v1/runs/{id}/cancel", h.cancelRun)
 	h.mux.HandleFunc("GET /v1/runs/{id}/events", h.getRunEvents)
@@ -142,6 +151,53 @@ func (h *Handler) createRun(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Location", "/v1/runs/"+runIDValue)
 	writeJSON(w, http.StatusCreated, creationResponse{ID: createdRun.ID, Status: createdRun.Status})
+}
+
+func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
+	after, err := parseAfter(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "after must be one non-negative integer"})
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "streaming is not supported"})
+		return
+	}
+
+	stored, err := h.store.ListEventsAfter(r.Context(), after)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for {
+		if len(stored) == 0 {
+			if err := h.wait(r.Context()); err != nil {
+				return
+			}
+		} else {
+			for _, item := range stored {
+				if err := writeSSEEvent(w, item); err != nil {
+					return
+				}
+				after = item.Sequence
+			}
+			flusher.Flush()
+		}
+
+		stored, err = h.store.ListEventsAfter(r.Context(), after)
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
@@ -202,15 +258,7 @@ func (h *Handler) getRunEvents(w http.ResponseWriter, r *http.Request) {
 		NextAfter: after,
 	}
 	for _, item := range stored {
-		response.Events = append(response.Events, eventResponse{
-			Sequence:   item.Sequence,
-			ID:         item.ID(),
-			RunID:      item.RunID(),
-			StepKey:    item.StepKey(),
-			Type:       item.Type(),
-			OccurredAt: item.OccurredAt(),
-			Payload:    item.Payload(),
-		})
+		response.Events = append(response.Events, responseEvent(item))
 		response.NextAfter = item.Sequence
 	}
 
@@ -345,6 +393,41 @@ func randomID(prefix string) (string, error) {
 		return "", fmt.Errorf("generate %s id: %w", prefix, err)
 	}
 	return prefix + "-" + hex.EncodeToString(bytes), nil
+}
+
+func waitForEvents(ctx context.Context) error {
+	timer := time.NewTimer(eventPollInterval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func writeSSEEvent(w io.Writer, stored event.Stored) error {
+	data, err := json.Marshal(responseEvent(stored))
+	if err != nil {
+		return fmt.Errorf("encode SSE event: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", stored.Sequence, data); err != nil {
+		return fmt.Errorf("write SSE event: %w", err)
+	}
+	return nil
+}
+
+func responseEvent(stored event.Stored) eventResponse {
+	return eventResponse{
+		Sequence:   stored.Sequence,
+		ID:         stored.ID(),
+		RunID:      stored.RunID(),
+		StepKey:    stored.StepKey(),
+		Type:       stored.Type(),
+		OccurredAt: stored.OccurredAt(),
+		Payload:    stored.Payload(),
+	}
 }
 
 func parseAfter(r *http.Request) (int64, error) {

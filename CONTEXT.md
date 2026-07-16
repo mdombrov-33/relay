@@ -130,10 +130,14 @@ rejects an already-terminal run as a conflict.
 `POST /v1/runs` creates a durable pending run and its queued lifecycle event
 atomically with server-owned run/event identity and time. It returns the new
 projection without starting workflow execution in the request.
+`GET /v1/events/stream?after=N` streams the global ordered event log as SSE.
+Each frame uses the database sequence as its SSE ID and includes the stable safe
+event JSON; polling stops when the request context is canceled, and reconnects
+resume strictly after the supplied cursor.
 
-Next: stream the global ordered event log through
-`GET /v1/events/stream?after=N`, using the database sequence as an exclusive
-reconnect cursor and stopping promptly when the request context is canceled.
+Next: add a configured HTTP server entry point that opens the PostgreSQL pool,
+serves `internal/httpapi`, and shuts down cleanly. The inspector needs a real
+runnable transport rather than a handler that is reachable only from tests.
 
 ## Repository map
 

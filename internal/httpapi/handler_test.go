@@ -142,6 +142,141 @@ func TestCreateRunMapsFailures(t *testing.T) {
 	}
 }
 
+func TestStreamEvents(t *testing.T) {
+	occurredAt := time.Date(2026, time.July, 17, 16, 0, 0, 0, time.UTC)
+	stored, err := event.NewStored(
+		42,
+		"event-42",
+		run.ID("run-123"),
+		run.StepKey("workflow"),
+		event.TypeWorkflowQueued,
+		occurredAt,
+		json.RawMessage(`{"status":"pending"}`),
+	)
+	if err != nil {
+		t.Fatalf("NewStored() error = %v", err)
+	}
+	store := &fakeRunReader{globalPages: [][]event.Stored{{stored}, {}}}
+	handler := newHandlerWithWait(store, time.Now, randomID, func(context.Context) error {
+		return context.Canceled
+	})
+
+	response := serveRequest(handler, http.MethodGet, "/v1/events/stream?after=41")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if response.Header().Get("Content-Type") != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", response.Header().Get("Content-Type"))
+	}
+	if response.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("Cache-Control = %q, want no-cache", response.Header().Get("Cache-Control"))
+	}
+	want := "id: 42\ndata: {\"sequence\":42,\"id\":\"event-42\",\"runId\":\"run-123\",\"stepKey\":\"workflow\",\"type\":\"workflow.queued.v1\",\"occurredAt\":\"2026-07-17T16:00:00Z\",\"payload\":{\"status\":\"pending\"}}\n\n"
+	if response.Body.String() != want {
+		t.Errorf("body = %q, want %q", response.Body.String(), want)
+	}
+	if len(store.globalAfter) != 2 || store.globalAfter[0] != 41 || store.globalAfter[1] != 42 {
+		t.Errorf("ListEventsAfter() cursors = %v, want [41 42]", store.globalAfter)
+	}
+}
+
+func TestStreamEventsRejectsInvalidCursor(t *testing.T) {
+	tests := []string{
+		"?after=",
+		"?after=-1",
+		"?after=abc",
+		"?after=1&after=2",
+	}
+
+	for _, query := range tests {
+		t.Run(query, func(t *testing.T) {
+			store := &fakeRunReader{}
+			response := serveRequest(NewHandler(store), http.MethodGet, "/v1/events/stream"+query)
+
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", response.Code, http.StatusBadRequest)
+			}
+			if store.globalCalls != 0 {
+				t.Errorf("ListEventsAfter() calls = %d, want 0", store.globalCalls)
+			}
+		})
+	}
+}
+
+func TestStreamEventsMapsInitialStoreFailure(t *testing.T) {
+	store := &fakeRunReader{globalErr: errors.New("password=secret")}
+
+	response := serveRequest(NewHandler(store), http.MethodGet, "/v1/events/stream")
+
+	if response.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+	if response.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", response.Header().Get("Content-Type"))
+	}
+	if strings.TrimSpace(response.Body.String()) != `{"error":"internal server error"}` {
+		t.Errorf("body = %q, want generic error", strings.TrimSpace(response.Body.String()))
+	}
+}
+
+func TestStreamEventsStopsWhenRequestIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &fakeRunReader{globalPages: [][]event.Stored{{}}}
+	waitCalls := 0
+	handler := newHandlerWithWait(store, time.Now, randomID, func(ctx context.Context) error {
+		waitCalls++
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	request := httptest.NewRequestWithContext(ctx, http.MethodGet, "/v1/events/stream", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if waitCalls != 1 || store.globalCalls != 1 {
+		t.Errorf("calls = (%d waits, %d reads), want (1, 1)", waitCalls, store.globalCalls)
+	}
+}
+
+func TestStreamEventsClosesAfterStoreFailure(t *testing.T) {
+	stored, err := event.NewStored(
+		42,
+		"event-42",
+		run.ID("run-123"),
+		run.StepKey("workflow"),
+		event.TypeWorkflowQueued,
+		time.Date(2026, time.July, 17, 16, 0, 0, 0, time.UTC),
+		json.RawMessage(`{"status":"pending"}`),
+	)
+	if err != nil {
+		t.Fatalf("NewStored() error = %v", err)
+	}
+	store := &fakeRunReader{}
+	store.listGlobal = func(_ context.Context, after int64) ([]event.Stored, error) {
+		if after == 0 {
+			return []event.Stored{stored}, nil
+		}
+		return nil, errors.New("password=secret")
+	}
+
+	response := serveRequest(NewHandler(store), http.MethodGet, "/v1/events/stream")
+
+	if response.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if !strings.Contains(response.Body.String(), "id: 42") {
+		t.Errorf("body = %q, want delivered event", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "password") {
+		t.Errorf("body = %q, want storage error hidden", response.Body.String())
+	}
+}
+
 func TestGetRunOmitsPendingApproval(t *testing.T) {
 	store := &fakeRunReader{record: postgres.RunRecord{Run: run.Run{ID: run.ID("run-123"), Status: run.StatusRunning}}}
 
@@ -517,6 +652,7 @@ type fakeRunReader struct {
 	approval             postgres.ApprovalRequestRecord
 	err                  error
 	eventsErr            error
+	globalErr            error
 	approvalErr          error
 	approvalResolveErr   error
 	cancelErr            error
@@ -524,6 +660,9 @@ type fakeRunReader struct {
 	approvalCreated      bool
 	runID                run.ID
 	eventsRunID          run.ID
+	globalPages          [][]event.Stored
+	globalAfter          []int64
+	listGlobal           func(context.Context, int64) ([]event.Stored, error)
 	approvalRequestID    string
 	signal               postgres.ApprovalSignal
 	resolved             event.Envelope
@@ -534,6 +673,7 @@ type fakeRunReader struct {
 	after                int64
 	findCalls            int
 	eventCalls           int
+	globalCalls          int
 	approvalFindCalls    int
 	approvalResolveCalls int
 	cancelCalls          int
@@ -565,6 +705,23 @@ func (f *fakeRunReader) ListRunEvents(_ context.Context, runID run.ID, after int
 	f.eventsRunID = runID
 	f.after = after
 	return f.events, f.eventsErr
+}
+
+func (f *fakeRunReader) ListEventsAfter(ctx context.Context, after int64) ([]event.Stored, error) {
+	f.globalCalls++
+	f.globalAfter = append(f.globalAfter, after)
+	if f.listGlobal != nil {
+		return f.listGlobal(ctx, after)
+	}
+	if f.globalErr != nil {
+		return nil, f.globalErr
+	}
+	if len(f.globalPages) == 0 {
+		return nil, nil
+	}
+	page := f.globalPages[0]
+	f.globalPages = f.globalPages[1:]
+	return page, nil
 }
 
 func (f *fakeRunReader) FindApprovalRequest(_ context.Context, requestID string) (postgres.ApprovalRequestRecord, error) {
