@@ -10,6 +10,7 @@ func TestStatusIsTerminal(t *testing.T) {
 	}{
 		{"pending is not terminal", StatusPending, false},
 		{"running is not terminal", StatusRunning, false},
+		{"waiting is not terminal", StatusWaiting, false},
 		{"succeeded is terminal", StatusSucceeded, true},
 		{"failed is terminal", StatusFailed, true},
 		{"canceled is terminal", StatusCanceled, true},

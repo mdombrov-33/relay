@@ -4,9 +4,11 @@ import "errors"
 
 var (
 	ErrCannotStart   = errors.New("only a pending run can start")
+	ErrCannotWait    = errors.New("only a running run can wait")
+	ErrCannotResume  = errors.New("only a waiting run can resume")
 	ErrCannotSucceed = errors.New("only a running run can succeed")
 	ErrCannotFail    = errors.New("only a running run can fail")
-	ErrCannotCancel  = errors.New("only a pending or running run can cancel")
+	ErrCannotCancel  = errors.New("only a pending, running, or waiting run can cancel")
 )
 
 type ID string
@@ -53,9 +55,27 @@ func (r *Run) Start() error {
 	return nil
 }
 
+func (r *Run) Wait() error {
+	if r.Status != StatusRunning {
+		return ErrCannotWait
+	}
+
+	r.Status = StatusWaiting
+	return nil
+}
+
+func (r *Run) Resume() error {
+	if r.Status != StatusWaiting {
+		return ErrCannotResume
+	}
+
+	r.Status = StatusRunning
+	return nil
+}
+
 func (r *Run) Cancel() error {
 	switch r.Status {
-	case StatusPending, StatusRunning:
+	case StatusPending, StatusRunning, StatusWaiting:
 		r.Status = StatusCanceled
 		return nil
 	default:

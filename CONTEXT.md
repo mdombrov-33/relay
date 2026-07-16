@@ -23,8 +23,8 @@ event timeline.
 
 ## Current phase
 
-Milestones 3 through 6 are complete. Milestone 7, tool policy and
-least-privilege handoff, is active.
+Milestones 3 through 7 are complete. Milestone 8, durable human approval, is
+active.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
@@ -87,8 +87,12 @@ model-proposed name; missing policy remains deny by default. A distinct
 unresolved, but does not yet wait durably.
 
 Milestone 7 is complete. Milestone 8, durable human approval, is active.
-Next: add a waiting run status and guarded in-memory transitions before adding
-persistence and signals.
+The in-memory run lifecycle now permits `running -> waiting -> running`, treats
+waiting as non-terminal, and permits cancellation while waiting. Success and
+failure remain legal only from running.
+
+Next: persist an approval request, the transition to waiting, and its safe event
+atomically; durable approval signals remain a later M8 slice.
 
 ## Repository map
 

@@ -27,6 +27,32 @@ func TestRunTransitions(t *testing.T) {
 			expectedError:  ErrCannotStart,
 		},
 		{
+			name:           "waits from running",
+			initialStatus:  StatusRunning,
+			transition:     (*Run).Wait,
+			expectedStatus: StatusWaiting,
+		},
+		{
+			name:           "does not wait from pending",
+			initialStatus:  StatusPending,
+			transition:     (*Run).Wait,
+			expectedStatus: StatusPending,
+			expectedError:  ErrCannotWait,
+		},
+		{
+			name:           "resumes from waiting",
+			initialStatus:  StatusWaiting,
+			transition:     (*Run).Resume,
+			expectedStatus: StatusRunning,
+		},
+		{
+			name:           "does not resume from running",
+			initialStatus:  StatusRunning,
+			transition:     (*Run).Resume,
+			expectedStatus: StatusRunning,
+			expectedError:  ErrCannotResume,
+		},
+		{
 			name:           "succeeds from running",
 			initialStatus:  StatusRunning,
 			transition:     (*Run).Succeed,
@@ -37,6 +63,13 @@ func TestRunTransitions(t *testing.T) {
 			initialStatus:  StatusPending,
 			transition:     (*Run).Succeed,
 			expectedStatus: StatusPending,
+			expectedError:  ErrCannotSucceed,
+		},
+		{
+			name:           "does not succeed from waiting",
+			initialStatus:  StatusWaiting,
+			transition:     (*Run).Succeed,
+			expectedStatus: StatusWaiting,
 			expectedError:  ErrCannotSucceed,
 		},
 		{
@@ -53,8 +86,21 @@ func TestRunTransitions(t *testing.T) {
 			expectedError:  ErrCannotFail,
 		},
 		{
+			name:           "does not fail from waiting",
+			initialStatus:  StatusWaiting,
+			transition:     (*Run).Fail,
+			expectedStatus: StatusWaiting,
+			expectedError:  ErrCannotFail,
+		},
+		{
 			name:           "cancels from pending",
 			initialStatus:  StatusPending,
+			transition:     (*Run).Cancel,
+			expectedStatus: StatusCanceled,
+		},
+		{
+			name:           "cancels from waiting",
+			initialStatus:  StatusWaiting,
 			transition:     (*Run).Cancel,
 			expectedStatus: StatusCanceled,
 		},
