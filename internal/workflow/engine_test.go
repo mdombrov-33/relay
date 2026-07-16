@@ -674,6 +674,108 @@ func TestEngineExecuteHydratesBoundedContext(t *testing.T) {
 	}
 }
 
+func TestEngineExecuteCompactsHistoryIntoSummary(t *testing.T) {
+	executable := &countingTool{
+		spec: tool.Spec{
+			Name:        "lookup",
+			Description: "Looks up synthetic support data",
+		},
+		output: tool.Output{Content: `{"result":"fresh"}`},
+	}
+	registry, err := tool.NewRegistry(executable)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	call := tool.Call{ID: "call_first", Name: "lookup", Arguments: json.RawMessage(`{"query":"first"}`)}
+	firstResponse := model.Response{ToolCalls: []tool.Call{call}}
+	retained := model.NewToolMessage(tool.Result{CallID: call.ID, ToolName: call.Name, Content: executable.output.Content})
+	history := []model.Message{model.NewAssistantMessage(firstResponse), retained}
+	maxBytes := mustMessagesSize(t, history) - 1
+	keepBytes := mustMessagesSize(t, []model.Message{retained})
+	request := model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "Resolve the synthetic support incident."}},
+		Tools:    []tool.Spec{executable.Spec()},
+	}
+	summary := SummaryState{Text: "The lookup request is already in progress."}
+	contextBudget := mustMessagesSize(t, append(append([]model.Message(nil), request.Messages...), model.Message{Role: model.RoleSystem, Content: "Current summary:\n" + summary.Text}, retained))
+
+	store := &checkpointStoreStub{
+		claim: func(context.Context, run.ID, run.StepKey, [sha256.Size]byte, time.Time) (postgres.StepCheckpoint, error) {
+			return postgres.StepCheckpoint{Attempt: 1, Status: postgres.StepStatusRunning}, nil
+		},
+		complete: func(_ context.Context, _ run.ID, _ run.StepKey, _ [sha256.Size]byte, _ int, result json.RawMessage, _ time.Time) (postgres.StepCheckpoint, error) {
+			return postgres.StepCheckpoint{Status: postgres.StepStatusCompleted, Result: result}, nil
+		},
+	}
+	summaryClient := model.NewScriptedClient(model.Response{Text: summary.Text})
+	client := model.NewScriptedClient(
+		firstResponse,
+		model.Response{Text: "The incident is resolved."},
+	)
+	events := event.NewLog()
+	r := run.New("run-123")
+	engine := Engine{
+		Client:             client,
+		Events:             events,
+		Tools:              registry,
+		MaxSteps:           2,
+		ModelTimeout:       time.Second,
+		ToolTimeout:        time.Second,
+		ContextBudgetBytes: contextBudget,
+		Compaction:         &CompactionPlanner{MaxBytes: maxBytes, KeepBytes: keepBytes},
+		Summary: &SummaryStep{
+			Client:      summaryClient,
+			Checkpoints: &StepRunner{Store: store},
+			Timeout:     time.Second,
+		},
+	}
+
+	response, err := engine.Execute(context.Background(), &r, request)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.Text != "The incident is resolved." {
+		t.Errorf("response text = %q, want final answer", response.Text)
+	}
+	if got := len(summaryClient.Requests()); got != 1 {
+		t.Fatalf("summary model requests = %d, want 1", got)
+	}
+
+	requests := client.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("workflow model requests = %d, want 2", len(requests))
+	}
+	want := append(append([]model.Message(nil), request.Messages...), model.Message{Role: model.RoleSystem, Content: "Current summary:\n" + summary.Text}, retained)
+	if !messagesEqual(requests[1].Messages, want) {
+		t.Fatalf("second request messages = %#v, want %#v", requests[1].Messages, want)
+	}
+
+	assertEventTypes(t, events.Events(),
+		event.TypeWorkflowStarted,
+		event.TypeModelRequested,
+		event.TypeModelCompleted,
+		event.TypeToolRequested,
+		event.TypeToolCompleted,
+		event.TypeMemoryCompacted,
+		event.TypeModelRequested,
+		event.TypeModelCompleted,
+		event.TypeWorkflowCompleted,
+	)
+
+	compacted := events.Events()[5]
+	if compacted.StepKey() != "memory/summary/2" {
+		t.Errorf("compaction step key = %q, want memory/summary/2", compacted.StepKey())
+	}
+	var payload event.MemoryPayload
+	if err := json.Unmarshal(compacted.Payload(), &payload); err != nil {
+		t.Fatalf("decode compacted payload: %v", err)
+	}
+	if payload != (event.MemoryPayload{EvictedMessages: 1, RetainedMessages: 1}) {
+		t.Errorf("compacted payload = %#v, want one evicted and one retained message", payload)
+	}
+}
+
 func TestEngineExecuteReturnsCheckpointedToolOutput(t *testing.T) {
 	cachedOutput := tool.Output{Content: `{"customer":"cached"}`}
 	cachedResult, err := json.Marshal(cachedOutput)

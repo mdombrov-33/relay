@@ -14,12 +14,13 @@ import (
 )
 
 var (
-	ErrInvalidMaxSteps     = errors.New("max steps must be positive")
-	ErrStepLimitExceeded   = errors.New("workflow step limit exceeded")
-	ErrToolsNotConfigured  = errors.New("tools not configured")
-	ErrInvalidModelTimeout = errors.New("model timeout must be positive")
-	ErrInvalidToolTimeout  = errors.New("tool timeout must be positive")
-	ErrEventsNotConfigured = errors.New("event log not configured")
+	ErrInvalidMaxSteps         = errors.New("max steps must be positive")
+	ErrStepLimitExceeded       = errors.New("workflow step limit exceeded")
+	ErrToolsNotConfigured      = errors.New("tools not configured")
+	ErrInvalidModelTimeout     = errors.New("model timeout must be positive")
+	ErrInvalidToolTimeout      = errors.New("tool timeout must be positive")
+	ErrEventsNotConfigured     = errors.New("event log not configured")
+	ErrCompactionNotConfigured = errors.New("compaction planner and summary step must be configured together")
 )
 
 const (
@@ -36,6 +37,8 @@ type Engine struct {
 	ToolTimeout        time.Duration
 	ContextBudgetBytes int
 	Checkpoints        *StepRunner
+	Compaction         *CompactionPlanner
+	Summary            *SummaryStep
 }
 
 func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) (model.Response, error) {
@@ -56,6 +59,17 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	if e.ContextBudgetBytes < 0 {
 		return model.Response{}, fmt.Errorf("execute workflow: %w", ErrInvalidContextBudget)
 	}
+	if (e.Compaction == nil) != (e.Summary == nil) {
+		return model.Response{}, fmt.Errorf("execute workflow: %w", ErrCompactionNotConfigured)
+	}
+	if e.Compaction != nil {
+		if _, err := e.Compaction.Plan(nil); err != nil {
+			return model.Response{}, fmt.Errorf("configure compaction: %w", err)
+		}
+		if err := e.Summary.validate(); err != nil {
+			return model.Response{}, fmt.Errorf("configure summary step: %w", err)
+		}
+	}
 
 	if err := r.Start(); err != nil {
 		return model.Response{}, fmt.Errorf("start run: %w", err)
@@ -66,6 +80,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 
 	pinned := request.Messages
 	var history []model.Message
+	var summary SummaryState
 	contextBudget := e.ContextBudgetBytes
 	if contextBudget == 0 {
 		contextBudget = DefaultContextBudgetBytes
@@ -84,7 +99,52 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			return model.Response{}, fmt.Errorf("execute workflow: %w", err)
 		}
 
-		messages, err := hydrator.Hydrate(pinned, history)
+		if e.Compaction != nil {
+			plan, err := e.Compaction.Plan(history)
+			if err != nil {
+				if failErr := r.Fail(); failErr != nil {
+					return model.Response{}, fmt.Errorf("fail run after compaction planning error: %w", failErr)
+				}
+				if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+					return model.Response{}, recordErr
+				}
+
+				return model.Response{}, fmt.Errorf("plan history compaction: %w", err)
+			}
+			if plan.Required {
+				memoryStepKey := run.StepKey(fmt.Sprintf("memory/summary/%d", step+1))
+				summary, err = e.Summary.Summarize(ctx, r.ID, memoryStepKey, summary, plan.Evicted)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						if cancelErr := r.Cancel(); cancelErr != nil {
+							return model.Response{}, fmt.Errorf("cancel run after summary cancellation: %w", cancelErr)
+						}
+						if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowCancelled, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+							return model.Response{}, recordErr
+						}
+
+						return model.Response{}, fmt.Errorf("summarize compacted history: %w", err)
+					}
+
+					if failErr := r.Fail(); failErr != nil {
+						return model.Response{}, fmt.Errorf("fail run after summary error: %w", failErr)
+					}
+					if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+						return model.Response{}, recordErr
+					}
+
+					return model.Response{}, fmt.Errorf("summarize compacted history: %w", err)
+				}
+
+				history = plan.Retained
+				payload := event.MemoryPayload{EvictedMessages: len(plan.Evicted), RetainedMessages: len(plan.Retained)}
+				if err := e.record(r, memoryStepKey, event.TypeMemoryCompacted, payload); err != nil {
+					return model.Response{}, err
+				}
+			}
+		}
+
+		messages, err := hydrator.Hydrate(pinnedWithSummary(pinned, summary), history)
 		if err != nil {
 			if failErr := r.Fail(); failErr != nil {
 				return model.Response{}, fmt.Errorf("fail run after context hydration error: %w", failErr)
@@ -224,6 +284,15 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	}
 
 	return model.Response{}, fmt.Errorf("execute workflow: %w", ErrStepLimitExceeded)
+}
+
+func pinnedWithSummary(pinned []model.Message, summary SummaryState) []model.Message {
+	if summary.Text == "" {
+		return pinned
+	}
+
+	messages := cloneContextMessages(pinned)
+	return append(messages, model.Message{Role: model.RoleSystem, Content: "Current summary:\n" + summary.Text})
 }
 
 func (e Engine) nextModel(ctx context.Context, runID run.ID, stepKey run.StepKey, request model.Request) (model.Response, error) {

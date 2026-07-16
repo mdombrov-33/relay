@@ -36,6 +36,7 @@ const (
 	TypeToolCompleted     Type = "tool.completed.v1"
 	TypeToolFailed        Type = "tool.failed.v1"
 	TypeToolDenied        Type = "tool.denied.v1"
+	TypeMemoryCompacted   Type = "memory.compacted.v1"
 )
 
 type Payload interface {
@@ -58,6 +59,13 @@ type ToolPayload struct {
 }
 
 func (ToolPayload) isPayload() {}
+
+type MemoryPayload struct {
+	EvictedMessages  int `json:"evictedMessages"`
+	RetainedMessages int `json:"retainedMessages"`
+}
+
+func (MemoryPayload) isPayload() {}
 
 type Envelope struct {
 	id         string

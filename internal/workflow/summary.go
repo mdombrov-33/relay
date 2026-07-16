@@ -34,14 +34,8 @@ func (s SummaryStep) Summarize(ctx context.Context, runID run.ID, stepKey run.St
 	if len(evicted) == 0 {
 		return previous, nil
 	}
-	if s.Client == nil {
-		return SummaryState{}, ErrSummaryClientNotConfigured
-	}
-	if s.Checkpoints == nil {
-		return SummaryState{}, ErrSummaryCheckpointNotConfigured
-	}
-	if s.Timeout <= 0 {
-		return SummaryState{}, ErrInvalidSummaryTimeout
+	if err := s.validate(); err != nil {
+		return SummaryState{}, err
 	}
 
 	request := summaryRequest(previous, evicted)
@@ -85,6 +79,20 @@ func (s SummaryStep) Summarize(ctx context.Context, runID run.ID, stepKey run.St
 	}
 
 	return summary, nil
+}
+
+func (s SummaryStep) validate() error {
+	if s.Client == nil {
+		return ErrSummaryClientNotConfigured
+	}
+	if s.Checkpoints == nil {
+		return ErrSummaryCheckpointNotConfigured
+	}
+	if s.Timeout <= 0 {
+		return ErrInvalidSummaryTimeout
+	}
+
+	return nil
 }
 
 func summaryRequest(previous SummaryState, evicted []model.Message) model.Request {

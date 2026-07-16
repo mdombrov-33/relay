@@ -73,13 +73,14 @@ oldest prefix and retained newest suffix at a lower watermark. It never splits a
 message and always keeps the latest message verbatim, even if that one message
 is larger than the lower watermark.
 
-`workflow.SummaryStep` now turns an evicted prefix plus prior summary state into
-an updated text summary through the normal model port and `StepRunner`. It uses
-a no-tools summary request, rejects empty or tool-calling responses, and reuses
-a completed summary checkpoint instead of calling the model again.
+The engine can now opt into a paired `CompactionPlanner` and `SummaryStep`.
+Before a later model turn it summarizes an evicted prefix through a stable
+`memory/summary/<turn>` checkpoint, retains the newest suffix, and hydrates the
+original pins plus the summary plus that suffix. It records a safe-count-only
+`memory.compacted.v1` event; summary text and history never enter the event.
 
-Next: wire compaction planning and `SummaryStep` through the engine so later
-model turns receive summary state before retained verbatim history.
+Next: begin M7 by adding a policy boundary that permits or denies registered
+tool calls before execution.
 
 ## Repository map
 

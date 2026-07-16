@@ -66,6 +66,15 @@ func TestNewEncodesTypedPayloads(t *testing.T) {
 			},
 			expected: `{"callId":"call-123","toolName":"lookup_customer"}`,
 		},
+		{
+			name: "memory",
+			typ:  event.TypeMemoryCompacted,
+			payload: event.MemoryPayload{
+				EvictedMessages:  3,
+				RetainedMessages: 2,
+			},
+			expected: `{"evictedMessages":3,"retainedMessages":2}`,
+		},
 	}
 
 	for _, test := range tests {
