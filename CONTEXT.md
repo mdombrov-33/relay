@@ -113,9 +113,12 @@ request is pending and again after its signal.
 The PostgreSQL Store reads one run and its pending approval as a consistent
 projection. `internal/httpapi` exposes it through `GET /v1/runs/{id}` with
 stable JSON responses and without leaking storage errors or sensitive payloads.
+`GET /v1/runs/{id}/events?after=N` returns the existing bounded ordered event
+page with an exclusive cursor and a deterministic `nextAfter` value.
 
-Next: expose a run's ordered event page through HTTP with a validated exclusive
-sequence cursor, then move from read-only observation to transport commands.
+Next: accept an approval decision through HTTP and translate it into the
+existing atomic approval signal transaction without moving event identity or
+time generation into PostgreSQL.
 
 ## Repository map
 
