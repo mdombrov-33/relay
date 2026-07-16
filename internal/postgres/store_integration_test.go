@@ -206,6 +206,131 @@ func TestStoreTransitionToTerminalRollsBackWhenEventInsertFails(t *testing.T) {
 	}
 }
 
+func TestStoreRequestApproval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := runningIntegrationRun(t, pool, ctx, "approval-requested")
+	if err := r.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	request := ApprovalRequest{
+		ID:       "approval-" + string(r.ID),
+		RunID:    r.ID,
+		StepKey:  run.StepKey("tool/1/issue-credit"),
+		CallID:   "call-123",
+		ToolName: "issue_credit",
+	}
+	requested := newApprovalRequestedEvent(t, integrationEventID(t, "approval-requested"), request)
+
+	if err := NewStore(pool).RequestApproval(ctx, r, request, requested); err != nil {
+		t.Fatalf("RequestApproval() error = %v", err)
+	}
+
+	var (
+		status    run.Status
+		updatedAt time.Time
+	)
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT status, updated_at FROM runs WHERE id = $1",
+		r.ID,
+	).Scan(&status, &updatedAt); err != nil {
+		t.Fatalf("query waiting run: %v", err)
+	}
+	if status != run.StatusWaiting {
+		t.Errorf("run status = %q, want %q", status, run.StatusWaiting)
+	}
+	if !updatedAt.Equal(requested.OccurredAt()) {
+		t.Errorf("run updated at = %s, want %s", updatedAt, requested.OccurredAt())
+	}
+
+	var (
+		requestID     string
+		requestRun    run.ID
+		stepKey       run.StepKey
+		callID        string
+		toolName      string
+		requestStatus ApprovalStatus
+		requestedAt   time.Time
+		resolvedAt    *time.Time
+	)
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT id, run_id, step_key, call_id, tool_name, status, requested_at, resolved_at
+		 FROM approval_requests
+		 WHERE id = $1`,
+		request.ID,
+	).Scan(&requestID, &requestRun, &stepKey, &callID, &toolName, &requestStatus, &requestedAt, &resolvedAt); err != nil {
+		t.Fatalf("query approval request: %v", err)
+	}
+	if requestID != request.ID || requestRun != request.RunID || stepKey != request.StepKey || callID != request.CallID || toolName != request.ToolName {
+		t.Errorf("approval request identity = (%q, %q, %q, %q, %q), want (%q, %q, %q, %q, %q)", requestID, requestRun, stepKey, callID, toolName, request.ID, request.RunID, request.StepKey, request.CallID, request.ToolName)
+	}
+	if requestStatus != ApprovalStatusPending || resolvedAt != nil {
+		t.Errorf("approval request resolution = (%q, %v), want pending and unresolved", requestStatus, resolvedAt)
+	}
+	if !requestedAt.Equal(requested.OccurredAt()) {
+		t.Errorf("approval requested at = %s, want %s", requestedAt, requested.OccurredAt())
+	}
+
+	stored, err := NewStore(pool).ListRunEvents(ctx, r.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if len(stored) != 1 || stored[0].ID() != requested.ID() || stored[0].Type() != event.TypeApprovalRequested {
+		t.Errorf("approval events = %#v, want only %q", stored, requested.ID())
+	}
+}
+
+func TestStoreRequestApprovalRollsBackWhenEventInsertFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := runningIntegrationRun(t, pool, ctx, "approval-rolled-back")
+	if err := r.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	request := ApprovalRequest{
+		ID:       "approval-" + string(r.ID),
+		RunID:    r.ID,
+		StepKey:  run.StepKey("tool/1/issue-credit"),
+		CallID:   "call-123",
+		ToolName: "issue_credit",
+	}
+	requested := newApprovalRequestedEvent(t, "", request)
+
+	if err := NewStore(pool).RequestApproval(ctx, r, request, requested); err == nil {
+		t.Fatal("RequestApproval() error = nil, want event insert failure")
+	}
+
+	var status run.Status
+	if err := pool.QueryRow(ctx, "SELECT status FROM runs WHERE id = $1", r.ID).Scan(&status); err != nil {
+		t.Fatalf("query rolled-back approval run: %v", err)
+	}
+	if status != run.StatusRunning {
+		t.Errorf("run status after rollback = %q, want %q", status, run.StatusRunning)
+	}
+
+	var requestCount, eventCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM approval_requests WHERE run_id = $1", r.ID).Scan(&requestCount); err != nil {
+		t.Fatalf("count rolled-back approval requests: %v", err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM events WHERE run_id = $1", r.ID).Scan(&eventCount); err != nil {
+		t.Fatalf("count rolled-back approval events: %v", err)
+	}
+	if requestCount != 0 || eventCount != 0 {
+		t.Errorf("rolled-back approval records = %d requests, %d events; want neither", requestCount, eventCount)
+	}
+}
+
 func TestStoreListRunEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -865,6 +990,24 @@ func newLifecycleEvent(t *testing.T, eventID string, runID run.ID, typ event.Typ
 	)
 	if err != nil {
 		t.Fatalf("new lifecycle event: %v", err)
+	}
+
+	return envelope
+}
+
+func newApprovalRequestedEvent(t *testing.T, eventID string, request ApprovalRequest) event.Envelope {
+	t.Helper()
+
+	envelope, err := event.New(
+		eventID,
+		request.RunID,
+		request.StepKey,
+		event.TypeApprovalRequested,
+		time.Now().UTC(),
+		event.ToolPayload{CallID: request.CallID, ToolName: request.ToolName},
+	)
+	if err != nil {
+		t.Fatalf("new approval requested event: %v", err)
 	}
 
 	return envelope

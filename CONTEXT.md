@@ -91,8 +91,14 @@ The in-memory run lifecycle now permits `running -> waiting -> running`, treats
 waiting as non-terminal, and permits cancellation while waiting. Success and
 failure remain legal only from running.
 
-Next: persist an approval request, the transition to waiting, and its safe event
-atomically; durable approval signals remain a later M8 slice.
+Goose migration `000004` permits the persisted waiting status and adds an
+`approval_requests` projection with one pending request per run. The Store
+atomically inserts a safe pending request, transitions only a running run to
+waiting, and appends its matching `approval.requested.v1` event. An injected
+event-insert failure proves all three writes roll back together.
+
+Next: persist one approval decision signal and atomically resolve and resume
+only its matching pending request and waiting run.
 
 ## Repository map
 

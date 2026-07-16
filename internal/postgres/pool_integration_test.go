@@ -24,7 +24,7 @@ func TestOpenPostgreSQL(t *testing.T) {
 	}
 	defer pool.Close()
 
-	for _, table := range []string{"runs", "events"} {
+	for _, table := range []string{"runs", "events", "approval_requests"} {
 		var exists bool
 		err := pool.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", table).Scan(&exists)
 		if err != nil {
