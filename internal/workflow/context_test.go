@@ -110,14 +110,16 @@ func messagesEqual(got, want []model.Message) bool {
 		return false
 	}
 
-	for index := range got {
-		if got[index].Role != want[index].Role || got[index].Content != want[index].Content || got[index].ToolCallID != want[index].ToolCallID || got[index].ToolName != want[index].ToolName || len(got[index].ToolCalls) != len(want[index].ToolCalls) {
+	for index := 0; index < len(got) && index < len(want); index++ {
+		gotMessage := got[index]
+		wantMessage := want[index]
+		if gotMessage.Role != wantMessage.Role || gotMessage.Content != wantMessage.Content || gotMessage.ToolCallID != wantMessage.ToolCallID || gotMessage.ToolName != wantMessage.ToolName || len(gotMessage.ToolCalls) != len(wantMessage.ToolCalls) {
 			return false
 		}
 
-		for callIndex := range got[index].ToolCalls {
-			gotCall := got[index].ToolCalls[callIndex]
-			wantCall := want[index].ToolCalls[callIndex]
+		for callIndex := 0; callIndex < len(gotMessage.ToolCalls) && callIndex < len(wantMessage.ToolCalls); callIndex++ {
+			gotCall := gotMessage.ToolCalls[callIndex]
+			wantCall := wantMessage.ToolCalls[callIndex]
 			if gotCall.ID != wantCall.ID || gotCall.Name != wantCall.Name || string(gotCall.Arguments) != string(wantCall.Arguments) {
 				return false
 			}

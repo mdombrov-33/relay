@@ -68,8 +68,13 @@ model call, using an explicit `ContextBudgetBytes` or the 16 KiB default. A
 multi-turn test proves the bounded request retains the task and newest exchange
 while omitting an older exchange.
 
-Next: add a pure compaction planner that selects an over-budget history prefix
-for a future checkpointed summary while retaining the newest messages verbatim.
+`workflow.CompactionPlanner` now separates over-budget history into an evicted
+oldest prefix and retained newest suffix at a lower watermark. It never splits a
+message and always keeps the latest message verbatim, even if that one message
+is larger than the lower watermark.
+
+Next: introduce the summary state and checkpointed summarization boundary that
+turns the planner's evicted history into model context.
 
 ## Repository map
 
