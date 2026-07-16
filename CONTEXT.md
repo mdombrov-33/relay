@@ -62,8 +62,14 @@ input and durable-history candidates. Its explicit serialized-byte budget
 preserves pinned input, retains the newest contiguous whole-message suffix that
 fits, rejects an oversized pinned task, and does not mutate caller-owned data.
 
-Next: wire the bounded-context hydrator into the workflow engine so every model
-turn is rebuilt from pinned input plus in-memory history.
+`workflow.Engine` now keeps the original request messages pinned and accumulates
+assistant/tool messages separately. It hydrates a fresh request before every
+model call, using an explicit `ContextBudgetBytes` or the 16 KiB default. A
+multi-turn test proves the bounded request retains the task and newest exchange
+while omitting an older exchange.
+
+Next: add a pure compaction planner that selects an over-budget history prefix
+for a future checkpointed summary while retaining the newest messages verbatim.
 
 ## Repository map
 

@@ -72,12 +72,13 @@ func runSuccessfulDemo() {
 
 	events := event.NewLog()
 	engine := workflow.Engine{
-		Client:       client,
-		Events:       events,
-		Tools:        tools,
-		MaxSteps:     3,
-		ModelTimeout: time.Second,
-		ToolTimeout:  time.Second,
+		Client:             client,
+		Events:             events,
+		Tools:              tools,
+		MaxSteps:           3,
+		ModelTimeout:       time.Second,
+		ToolTimeout:        time.Second,
+		ContextBudgetBytes: workflow.DefaultContextBudgetBytes,
 	}
 
 	r := run.New("demo-001")
@@ -101,11 +102,12 @@ func runSuccessfulDemo() {
 func runFailedDemo() {
 	events := event.NewLog()
 	engine := workflow.Engine{
-		Client:       model.NewScriptedClient(),
-		Events:       events,
-		MaxSteps:     1,
-		ModelTimeout: time.Second,
-		ToolTimeout:  time.Second,
+		Client:             model.NewScriptedClient(),
+		Events:             events,
+		MaxSteps:           1,
+		ModelTimeout:       time.Second,
+		ToolTimeout:        time.Second,
+		ContextBudgetBytes: workflow.DefaultContextBudgetBytes,
 	}
 
 	r := run.New("demo-failed-001")

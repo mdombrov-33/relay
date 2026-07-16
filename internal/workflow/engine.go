@@ -22,16 +22,20 @@ var (
 	ErrEventsNotConfigured = errors.New("event log not configured")
 )
 
-const workflowStepKey run.StepKey = "workflow"
+const (
+	workflowStepKey           run.StepKey = "workflow"
+	DefaultContextBudgetBytes             = 16 * 1024
+)
 
 type Engine struct {
-	Client       model.Client
-	Events       *event.Log
-	Tools        *tool.Registry
-	MaxSteps     int
-	ModelTimeout time.Duration
-	ToolTimeout  time.Duration
-	Checkpoints  *StepRunner
+	Client             model.Client
+	Events             *event.Log
+	Tools              *tool.Registry
+	MaxSteps           int
+	ModelTimeout       time.Duration
+	ToolTimeout        time.Duration
+	ContextBudgetBytes int
+	Checkpoints        *StepRunner
 }
 
 func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) (model.Response, error) {
@@ -49,6 +53,9 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	if e.Events == nil {
 		return model.Response{}, fmt.Errorf("execute workflow: %w", ErrEventsNotConfigured)
 	}
+	if e.ContextBudgetBytes < 0 {
+		return model.Response{}, fmt.Errorf("execute workflow: %w", ErrInvalidContextBudget)
+	}
 
 	if err := r.Start(); err != nil {
 		return model.Response{}, fmt.Errorf("start run: %w", err)
@@ -57,7 +64,13 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 		return model.Response{}, err
 	}
 
-	request.Messages = append([]model.Message(nil), request.Messages...)
+	pinned := request.Messages
+	var history []model.Message
+	contextBudget := e.ContextBudgetBytes
+	if contextBudget == 0 {
+		contextBudget = DefaultContextBudgetBytes
+	}
+	hydrator := ContextHydrator{MaxBytes: contextBudget}
 
 	for step := 0; step < e.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
@@ -71,12 +84,26 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			return model.Response{}, fmt.Errorf("execute workflow: %w", err)
 		}
 
+		messages, err := hydrator.Hydrate(pinned, history)
+		if err != nil {
+			if failErr := r.Fail(); failErr != nil {
+				return model.Response{}, fmt.Errorf("fail run after context hydration error: %w", failErr)
+			}
+			if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+				return model.Response{}, recordErr
+			}
+
+			return model.Response{}, fmt.Errorf("hydrate model context: %w", err)
+		}
+		modelRequest := request
+		modelRequest.Messages = messages
+
 		modelStepKey := run.StepKey(fmt.Sprintf("model/%d", step+1))
 		if err := e.record(r, modelStepKey, event.TypeModelRequested, event.ModelPayload{}); err != nil {
 			return model.Response{}, err
 		}
 
-		response, err := e.nextModel(ctx, r.ID, modelStepKey, request)
+		response, err := e.nextModel(ctx, r.ID, modelStepKey, modelRequest)
 		if err != nil {
 			if recordErr := e.record(r, modelStepKey, event.TypeModelFailed, event.ModelPayload{}); recordErr != nil {
 				return model.Response{}, recordErr
@@ -106,7 +133,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			return model.Response{}, err
 		}
 
-		request.Messages = append(request.Messages, model.NewAssistantMessage(response))
+		history = append(history, model.NewAssistantMessage(response))
 
 		if len(response.ToolCalls) == 0 {
 			if err := r.Succeed(); err != nil {
@@ -181,7 +208,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 				return model.Response{}, err
 			}
 
-			request.Messages = append(request.Messages, model.NewToolMessage(tool.Result{
+			history = append(history, model.NewToolMessage(tool.Result{
 				CallID:   call.ID,
 				ToolName: call.Name,
 				Content:  output.Content,

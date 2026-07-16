@@ -76,6 +76,26 @@ func TestEngineExecute(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects a negative context budget before starting the run", func(t *testing.T) {
+		r := run.New("run-123")
+		engine := Engine{
+			Client:             model.NewScriptedClient(model.Response{Text: "Hello from Relay"}),
+			Events:             event.NewLog(),
+			MaxSteps:           1,
+			ModelTimeout:       time.Second,
+			ToolTimeout:        time.Second,
+			ContextBudgetBytes: -1,
+		}
+
+		_, err := engine.Execute(context.Background(), &r, model.Request{})
+		if !errors.Is(err, ErrInvalidContextBudget) {
+			t.Fatalf("Execute() error = %v, want ErrInvalidContextBudget", err)
+		}
+		if r.Status != run.StatusPending {
+			t.Errorf("run status = %q, want %q", r.Status, run.StatusPending)
+		}
+	})
+
 	t.Run("returns the model response and succeeds the run", func(t *testing.T) {
 		r := run.New("run-123")
 		events := event.NewLog()
@@ -594,6 +614,64 @@ func TestEngineExecuteReturnsCheckpointedModelResponse(t *testing.T) {
 		event.TypeModelCompleted,
 		event.TypeWorkflowCompleted,
 	)
+}
+
+func TestEngineExecuteHydratesBoundedContext(t *testing.T) {
+	executable := &countingTool{
+		spec: tool.Spec{
+			Name:        "lookup",
+			Description: "Looks up synthetic support data",
+		},
+		output: tool.Output{Content: `{"result":"fresh"}`},
+	}
+	registry, err := tool.NewRegistry(executable)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	firstCall := tool.Call{ID: "call_first", Name: "lookup", Arguments: json.RawMessage(`{"query":"first"}`)}
+	secondCall := tool.Call{ID: "call_second", Name: "lookup", Arguments: json.RawMessage(`{"query":"second"}`)}
+	firstResponse := model.Response{ToolCalls: []tool.Call{firstCall}}
+	secondResponse := model.Response{ToolCalls: []tool.Call{secondCall}}
+	request := model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "Resolve the synthetic support incident."}},
+		Tools:    []tool.Spec{executable.Spec()},
+	}
+	latestHistory := []model.Message{
+		model.NewAssistantMessage(secondResponse),
+		model.NewToolMessage(tool.Result{CallID: secondCall.ID, ToolName: secondCall.Name, Content: executable.output.Content}),
+	}
+	budget := mustMessagesSize(t, request.Messages) + mustMessagesSize(t, latestHistory)
+
+	client := model.NewScriptedClient(firstResponse, secondResponse, model.Response{Text: "The incident is resolved."})
+	r := run.New("run-123")
+	engine := Engine{
+		Client:             client,
+		Events:             event.NewLog(),
+		Tools:              registry,
+		MaxSteps:           3,
+		ModelTimeout:       time.Second,
+		ToolTimeout:        time.Second,
+		ContextBudgetBytes: budget,
+	}
+
+	response, err := engine.Execute(context.Background(), &r, request)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.Text != "The incident is resolved." {
+		t.Errorf("response text = %q, want final answer", response.Text)
+	}
+
+	requests := client.Requests()
+	if len(requests) != 3 {
+		t.Fatalf("model requests = %d, want 3", len(requests))
+	}
+
+	want := append(append([]model.Message(nil), request.Messages...), latestHistory...)
+	if !messagesEqual(requests[2].Messages, want) {
+		t.Fatalf("third request messages = %#v, want %#v", requests[2].Messages, want)
+	}
 }
 
 func TestEngineExecuteReturnsCheckpointedToolOutput(t *testing.T) {
