@@ -25,9 +25,10 @@ var (
 )
 
 const (
-	workflowStepKey           run.StepKey = "workflow"
-	DefaultContextBudgetBytes             = 16 * 1024
-	deniedToolResult                      = "tool call denied by policy"
+	workflowStepKey            run.StepKey = "workflow"
+	DefaultContextBudgetBytes              = 16 * 1024
+	deniedToolResult                       = "tool call denied by policy"
+	approvalRequiredToolResult             = "tool call requires approval"
 )
 
 type ToolPolicy interface {
@@ -252,7 +253,20 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 
 				return model.Response{}, fmt.Errorf("lookup tool metadata %q: %w", call.Name, err)
 			}
-			if e.toolDecision(spec) != policy.DecisionAllow {
+			switch e.toolDecision(spec) {
+			case policy.DecisionAllow:
+			case policy.DecisionRequireApproval:
+				if err := e.record(r, toolStepKey, event.TypeApprovalRequested, payload); err != nil {
+					return model.Response{}, err
+				}
+				history = append(history, model.NewToolMessage(tool.Result{
+					CallID:   call.ID,
+					ToolName: call.Name,
+					Content:  approvalRequiredToolResult,
+				}))
+
+				continue
+			default:
 				if err := e.record(r, toolStepKey, event.TypeToolDenied, payload); err != nil {
 					return model.Response{}, err
 				}

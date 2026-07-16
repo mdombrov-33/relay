@@ -58,6 +58,14 @@ func (t *countingTool) Execute(context.Context, tool.Execution) (tool.Output, er
 	return t.output, nil
 }
 
+type approvalRequiredPolicy struct{}
+
+var _ ToolPolicy = approvalRequiredPolicy{}
+
+func (approvalRequiredPolicy) Decide(tool.Spec) policy.Decision {
+	return policy.DecisionRequireApproval
+}
+
 func TestEngineToolDecisionDefaultsToDeny(t *testing.T) {
 	if got := (Engine{}).toolDecision(tool.Spec{Authority: tool.AuthorityRead}); got != policy.DecisionDeny {
 		t.Errorf("toolDecision() = %q, want %q", got, policy.DecisionDeny)
@@ -760,6 +768,77 @@ func TestEngineExecuteDeniesEffectAuthority(t *testing.T) {
 	}
 	if payload != (event.ToolPayload{CallID: call.ID, ToolName: call.Name}) {
 		t.Errorf("denied payload = %#v, want call identity", payload)
+	}
+}
+
+func TestEngineExecuteRequestsApprovalWithoutExecutingTool(t *testing.T) {
+	executable := &countingTool{
+		spec: tool.Spec{
+			Name:        "issue_credit",
+			Description: "Issues a synthetic support credit",
+			Authority:   tool.AuthorityEffect,
+		},
+		output: tool.Output{Content: `{"credit":"issued"}`},
+	}
+	registry, err := tool.NewRegistry(executable)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	call := tool.Call{ID: "call_credit", Name: "issue_credit", Arguments: json.RawMessage(`{"amount_cents":500}`)}
+	client := model.NewScriptedClient(
+		model.Response{ToolCalls: []tool.Call{call}},
+		model.Response{Text: "A support credit requires human approval."},
+	)
+	events := event.NewLog()
+	r := run.New("run-123")
+	engine := Engine{
+		Client:       client,
+		Events:       events,
+		Tools:        registry,
+		ToolPolicy:   approvalRequiredPolicy{},
+		MaxSteps:     2,
+		ModelTimeout: time.Second,
+		ToolTimeout:  time.Second,
+	}
+
+	response, err := engine.Execute(context.Background(), &r, model.Request{
+		Tools: []tool.Spec{executable.Spec()},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.Text != "A support credit requires human approval." {
+		t.Errorf("response text = %q, want final response", response.Text)
+	}
+	if executable.calls != 0 {
+		t.Errorf("tool calls = %d, want 0", executable.calls)
+	}
+
+	requests := client.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(requests))
+	}
+	if got := requests[1].Messages[1]; got.Role != model.RoleTool || got.Content != approvalRequiredToolResult {
+		t.Errorf("approval tool message = %#v, want approval requirement", got)
+	}
+
+	assertEventTypes(t, events.Events(),
+		event.TypeWorkflowStarted,
+		event.TypeModelRequested,
+		event.TypeModelCompleted,
+		event.TypeApprovalRequested,
+		event.TypeModelRequested,
+		event.TypeModelCompleted,
+		event.TypeWorkflowCompleted,
+	)
+
+	var payload event.ToolPayload
+	if err := json.Unmarshal(events.Events()[3].Payload(), &payload); err != nil {
+		t.Fatalf("decode approval payload: %v", err)
+	}
+	if payload != (event.ToolPayload{CallID: call.ID, ToolName: call.Name}) {
+		t.Errorf("approval payload = %#v, want call identity", payload)
 	}
 }
 

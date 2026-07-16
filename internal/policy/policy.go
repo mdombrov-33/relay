@@ -5,8 +5,9 @@ import "github.com/mdombrov-33/relay/internal/tool"
 type Decision string
 
 const (
-	DecisionAllow Decision = "allow"
-	DecisionDeny  Decision = "deny"
+	DecisionAllow           Decision = "allow"
+	DecisionDeny            Decision = "deny"
+	DecisionRequireApproval Decision = "require_approval"
 )
 
 type Allowlist struct {

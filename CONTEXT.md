@@ -82,10 +82,13 @@ original pins plus the summary plus that suffix. It records a safe-count-only
 Registered tools now declare validated `read` or `effect` authority. The engine
 retrieves stored registry metadata for a configured policy before executable
 resolution, so `policy.Allowlist` decides declared authority rather than a
-model-proposed name; missing policy remains deny by default.
+model-proposed name; missing policy remains deny by default. A distinct
+`require_approval` decision records `approval.requested.v1` and leaves the tool
+unresolved, but does not yet wait durably.
 
-Next: add an explicit non-executing approval-required policy decision before
-M8 makes approvals durable.
+Milestone 7 is complete. Milestone 8, durable human approval, is active.
+Next: add a waiting run status and guarded in-memory transitions before adding
+persistence and signals.
 
 ## Repository map
 

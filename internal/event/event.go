@@ -36,6 +36,7 @@ const (
 	TypeToolCompleted     Type = "tool.completed.v1"
 	TypeToolFailed        Type = "tool.failed.v1"
 	TypeToolDenied        Type = "tool.denied.v1"
+	TypeApprovalRequested Type = "approval.requested.v1"
 	TypeMemoryCompacted   Type = "memory.compacted.v1"
 )
 
