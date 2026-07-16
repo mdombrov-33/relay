@@ -30,10 +30,10 @@ events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
 18 Compose service, a ping-verified `pgx/v5` pool, and a concrete store that
 atomically creates a pending run or applies a terminal transition with its
 lifecycle event, and reads bounded ordered event pages by run or global cursor.
-`make test-integration` connects to the migrated local database.
+`make test-integration` connects to the migrated local database and proves
+committed run/event history survives reopening a pool.
 
-Next: expand real-PostgreSQL integration coverage, starting with reopening a
-pool and reading previously committed event history.
+Next: add a small read-only `relayctl` event inspection command.
 
 ## Repository map
 

@@ -96,6 +96,45 @@ func TestStoreCreateRunRollsBackWhenEventInsertFails(t *testing.T) {
 	}
 }
 
+func TestStorePersistsRunAndEventAcrossPoolRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	r := run.New(integrationRunID(t, "pool-restart"))
+	queued := newQueuedEvent(t, integrationEventID(t, "pool-restart"), r.ID)
+
+	func() {
+		writerPool := openIntegrationPool(t, ctx)
+		defer writerPool.Close()
+
+		if err := NewStore(writerPool).CreateRun(ctx, r, queued); err != nil {
+			t.Fatalf("CreateRun() error = %v", err)
+		}
+	}()
+
+	readerPool := openIntegrationPool(t, ctx)
+	defer readerPool.Close()
+
+	var status run.Status
+	if err := readerPool.QueryRow(ctx, "SELECT status FROM runs WHERE id = $1", r.ID).Scan(&status); err != nil {
+		t.Fatalf("query persisted run: %v", err)
+	}
+	if status != run.StatusPending {
+		t.Errorf("persisted run status = %q, want %q", status, run.StatusPending)
+	}
+
+	stored, err := NewStore(readerPool).ListRunEvents(ctx, r.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if len(stored) != 1 {
+		t.Fatalf("ListRunEvents() length = %d, want 1", len(stored))
+	}
+	if stored[0].ID() != queued.ID() || stored[0].Type() != event.TypeWorkflowQueued {
+		t.Errorf("persisted event = (ID %q, type %q), want (ID %q, type %q)", stored[0].ID(), stored[0].Type(), queued.ID(), event.TypeWorkflowQueued)
+	}
+}
+
 func TestStoreTransitionToTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
