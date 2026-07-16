@@ -164,6 +164,76 @@ func TestStoreTransitionToTerminalRollsBackWhenEventInsertFails(t *testing.T) {
 	}
 }
 
+func TestStoreListRunEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "listed")
+	first := insertIntegrationEvent(t, pool, ctx, integrationEventID(t, "queued"), r.ID, event.TypeWorkflowQueued, run.StatusPending)
+	second := insertIntegrationEvent(t, pool, ctx, integrationEventID(t, "started"), r.ID, event.TypeWorkflowStarted, run.StatusRunning)
+
+	stored, err := NewStore(pool).ListRunEvents(ctx, r.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRunEvents() error = %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("ListRunEvents() length = %d, want 2", len(stored))
+	}
+	if stored[0].Sequence != first.Sequence || stored[1].Sequence != second.Sequence {
+		t.Errorf("event sequences = (%d, %d), want (%d, %d)", stored[0].Sequence, stored[1].Sequence, first.Sequence, second.Sequence)
+	}
+	if stored[0].ID() != first.ID() || stored[1].ID() != second.ID() {
+		t.Errorf("event IDs = (%q, %q), want (%q, %q)", stored[0].ID(), stored[1].ID(), first.ID(), second.ID())
+	}
+
+	afterFirst, err := NewStore(pool).ListRunEvents(ctx, r.ID, first.Sequence)
+	if err != nil {
+		t.Fatalf("ListRunEvents() after first error = %v", err)
+	}
+	if len(afterFirst) != 1 || afterFirst[0].Sequence != second.Sequence {
+		t.Errorf("ListRunEvents() after first = %#v, want only sequence %d", afterFirst, second.Sequence)
+	}
+}
+
+func TestStoreListEventsAfter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	before := latestEventSequence(t, pool, ctx)
+	firstRun := pendingIntegrationRun(t, pool, ctx, "global-first")
+	first := insertIntegrationEvent(t, pool, ctx, integrationEventID(t, "global-first"), firstRun.ID, event.TypeWorkflowQueued, run.StatusPending)
+	secondRun := pendingIntegrationRun(t, pool, ctx, "global-second")
+	second := insertIntegrationEvent(t, pool, ctx, integrationEventID(t, "global-second"), secondRun.ID, event.TypeWorkflowQueued, run.StatusPending)
+	third := insertIntegrationEvent(t, pool, ctx, integrationEventID(t, "global-third"), secondRun.ID, event.TypeWorkflowStarted, run.StatusRunning)
+
+	stored, err := NewStore(pool).ListEventsAfter(ctx, before)
+	if err != nil {
+		t.Fatalf("ListEventsAfter() error = %v", err)
+	}
+	if len(stored) != 3 {
+		t.Fatalf("ListEventsAfter() length = %d, want 3", len(stored))
+	}
+	for index, want := range []event.Stored{first, second, third} {
+		if stored[index].Sequence != want.Sequence || stored[index].ID() != want.ID() {
+			t.Errorf("event %d = (sequence %d, ID %q), want (sequence %d, ID %q)", index, stored[index].Sequence, stored[index].ID(), want.Sequence, want.ID())
+		}
+	}
+
+	afterSecond, err := NewStore(pool).ListEventsAfter(ctx, second.Sequence)
+	if err != nil {
+		t.Fatalf("ListEventsAfter() after second error = %v", err)
+	}
+	if len(afterSecond) != 1 || afterSecond[0].Sequence != third.Sequence {
+		t.Errorf("ListEventsAfter() after second = %#v, want only sequence %d", afterSecond, third.Sequence)
+	}
+}
+
 func openIntegrationPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 
@@ -215,11 +285,28 @@ func newLifecycleEvent(t *testing.T, eventID string, runID run.ID, typ event.Typ
 func runningIntegrationRun(t *testing.T, pool *pgxpool.Pool, ctx context.Context, suffix string) run.Run {
 	t.Helper()
 
-	r := run.New(integrationRunID(t, suffix))
+	r := pendingIntegrationRun(t, pool, ctx, suffix)
 	if err := r.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE runs SET status = $2, updated_at = $3 WHERE id = $1",
+		r.ID,
+		r.Status,
+		time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("update running run: %v", err)
+	}
+
+	return r
+}
+
+func pendingIntegrationRun(t *testing.T, pool *pgxpool.Pool, ctx context.Context, suffix string) run.Run {
+	t.Helper()
+
+	r := run.New(integrationRunID(t, suffix))
 	now := time.Now().UTC()
 	if _, err := pool.Exec(
 		ctx,
@@ -229,8 +316,47 @@ func runningIntegrationRun(t *testing.T, pool *pgxpool.Pool, ctx context.Context
 		r.Status,
 		now,
 	); err != nil {
-		t.Fatalf("insert running run: %v", err)
+		t.Fatalf("insert pending run: %v", err)
 	}
 
 	return r
+}
+
+func insertIntegrationEvent(t *testing.T, pool *pgxpool.Pool, ctx context.Context, eventID string, runID run.ID, typ event.Type, status run.Status) event.Stored {
+	t.Helper()
+
+	envelope := newLifecycleEvent(t, eventID, runID, typ, status)
+	var sequence int64
+	if err := pool.QueryRow(
+		ctx,
+		`INSERT INTO events (id, run_id, step_key, type, occurred_at, payload)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		 RETURNING sequence`,
+		envelope.ID(),
+		envelope.RunID(),
+		envelope.StepKey(),
+		envelope.Type(),
+		envelope.OccurredAt(),
+		string(envelope.Payload()),
+	).Scan(&sequence); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	stored, err := event.NewStored(sequence, envelope.ID(), envelope.RunID(), envelope.StepKey(), envelope.Type(), envelope.OccurredAt(), envelope.Payload())
+	if err != nil {
+		t.Fatalf("new stored event: %v", err)
+	}
+
+	return stored
+}
+
+func latestEventSequence(t *testing.T, pool *pgxpool.Pool, ctx context.Context) int64 {
+	t.Helper()
+
+	var sequence int64
+	if err := pool.QueryRow(ctx, "SELECT coalesce(max(sequence), 0) FROM events").Scan(&sequence); err != nil {
+		t.Fatalf("query latest event sequence: %v", err)
+	}
+
+	return sequence
 }

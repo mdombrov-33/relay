@@ -15,6 +15,11 @@ const MaxPayloadBytes = 8 << 10
 
 var ErrPayloadTooLarge = errors.New("event payload exceeds maximum size")
 
+var (
+	ErrInvalidStoredSequence = errors.New("stored event sequence must be positive")
+	ErrInvalidStoredPayload  = errors.New("stored event payload must be valid JSON")
+)
+
 type Type string
 
 const (
@@ -72,6 +77,13 @@ type Envelope struct {
 	payload    json.RawMessage
 }
 
+// Stored is an event envelope read from durable storage. Sequence is assigned
+// by PostgreSQL and orders events within a run and across all runs.
+type Stored struct {
+	Sequence int64
+	Envelope
+}
+
 type envelopeJSON struct {
 	ID         string          `json:"id"`
 	RunID      run.ID          `json:"runId"`
@@ -102,6 +114,29 @@ func New(id string, runID run.ID, stepKey run.StepKey, typ Type, occurredAt time
 		typ:        typ,
 		occurredAt: occurredAt,
 		payload:    encodedPayload,
+	}, nil
+}
+
+// NewStored reconstructs an event read from durable storage. Stored payloads
+// only need valid JSON so readers can display unknown historical event shapes.
+func NewStored(sequence int64, id string, runID run.ID, stepKey run.StepKey, typ Type, occurredAt time.Time, payload json.RawMessage) (Stored, error) {
+	if sequence < 1 {
+		return Stored{}, ErrInvalidStoredSequence
+	}
+	if !json.Valid(payload) {
+		return Stored{}, ErrInvalidStoredPayload
+	}
+
+	return Stored{
+		Sequence: sequence,
+		Envelope: Envelope{
+			id:         id,
+			runID:      runID,
+			stepKey:    stepKey,
+			typ:        typ,
+			occurredAt: occurredAt,
+			payload:    bytes.Clone(payload),
+		},
 	}, nil
 }
 
