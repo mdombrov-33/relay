@@ -4,7 +4,7 @@ GOOSE ?= goose
 COMPOSE ?= docker compose
 DB_SERVICE ?= db
 MIGRATIONS_DIR := migrations
-DATABASE_URL ?= postgres://relay:relay@localhost:5433/relay?sslmode=disable
+DATABASE_URL ?= postgres://relay:relay@localhost:5434/relay?sslmode=disable
 
 .PHONY: check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate test test-integration test-race
 

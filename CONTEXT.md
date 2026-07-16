@@ -27,11 +27,12 @@ Milestone 3 is active: PostgreSQL event log and run projection.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
-18 Compose service, and a ping-verified `pgx/v5` pool. `make test-integration`
+18 Compose service, a ping-verified `pgx/v5` pool, and a concrete store that
+atomically creates a pending run plus its queued event. `make test-integration`
 connects to the migrated local database.
 
-Next: transactionally create a pending run projection and its
-`workflow.queued.v1` event, proving a failed transaction persists neither.
+Next: transactionally persist terminal run transitions with their lifecycle
+events.
 
 ## Repository map
 
@@ -65,7 +66,7 @@ migrations/         Goose PostgreSQL schema migrations
 - Unit tests: `make test`
 - Full gate: `make check`
 - Database: `make db-up`, `make migrate-up`, `make test-integration`
-- Default URL: `postgres://relay:relay@localhost:5433/relay?sslmode=disable`
+- Default URL: `postgres://relay:relay@localhost:5434/relay?sslmode=disable`
 
 The full roadmap, contract detail, and decision rationale live in the linked
 Obsidian notes. Keep this file an orientation snapshot, not a second playbook.

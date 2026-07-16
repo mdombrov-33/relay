@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: relay
       POSTGRES_PASSWORD: relay
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - relay-postgres-data:/var/lib/postgresql
     healthcheck:
