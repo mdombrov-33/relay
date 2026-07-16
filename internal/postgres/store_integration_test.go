@@ -4,6 +4,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -390,6 +393,170 @@ func TestStepsProjectionInvariants(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := pool.Exec(ctx, test.query, test.args...); err == nil {
 				t.Fatal("Exec() error = nil, want schema constraint violation")
+			}
+		})
+	}
+}
+
+func TestStoreClaimStepCreatesRunningCheckpoint(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "claim")
+	startedAt := time.Now().UTC()
+	inputHash := sha256.Sum256([]byte("model input"))
+
+	checkpoint, err := NewStore(pool).ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt)
+	if err != nil {
+		t.Fatalf("ClaimStep() error = %v", err)
+	}
+	if checkpoint.RunID != r.ID || checkpoint.StepKey != run.StepKey("model/1") || checkpoint.InputHash != inputHash || checkpoint.Attempt != 1 || checkpoint.Status != StepStatusRunning || checkpoint.Result != nil || checkpoint.CompletedAt != nil || !checkpoint.StartedAt.Equal(startedAt) {
+		t.Errorf("ClaimStep() = %#v, want running checkpoint", checkpoint)
+	}
+}
+
+func TestStoreClaimStepReturnsCompletedCheckpoint(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "cached")
+	startedAt := time.Now().UTC()
+	inputHash := sha256.Sum256([]byte("model input"))
+	store := NewStore(pool)
+
+	if _, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt); err != nil {
+		t.Fatalf("ClaimStep() initial error = %v", err)
+	}
+	completedAt := startedAt.Add(time.Second)
+	result := json.RawMessage(`{"response":"cached"}`)
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("model/1"), inputHash, result, completedAt); err != nil {
+		t.Fatalf("CompleteStep() error = %v", err)
+	}
+
+	checkpoint, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("ClaimStep() cached error = %v", err)
+	}
+	if checkpoint.Attempt != 1 || checkpoint.Status != StepStatusCompleted || string(checkpoint.Result) != `{"response": "cached"}` || checkpoint.CompletedAt == nil || !checkpoint.CompletedAt.Equal(completedAt) {
+		t.Errorf("ClaimStep() cached = %#v, want completed checkpoint", checkpoint)
+	}
+}
+
+func TestStoreClaimStepRejectsDuplicateOrChangedInput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "claim-rejected")
+	startedAt := time.Now().UTC()
+	inputHash := sha256.Sum256([]byte("model input"))
+	store := NewStore(pool)
+
+	if _, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), inputHash, startedAt); err != nil {
+		t.Fatalf("ClaimStep() initial error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		inputHash [sha256.Size]byte
+		want      error
+	}{
+		{
+			name:      "already running",
+			inputHash: inputHash,
+			want:      ErrStepAlreadyRunning,
+		},
+		{
+			name:      "changed input",
+			inputHash: sha256.Sum256([]byte("changed model input")),
+			want:      ErrStepInputMismatch,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := store.ClaimStep(ctx, r.ID, run.StepKey("model/1"), test.inputHash, startedAt.Add(time.Second))
+			if !errors.Is(err, test.want) {
+				t.Fatalf("ClaimStep() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestStoreCompleteStep(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "complete")
+	startedAt := time.Now().UTC()
+	completedAt := startedAt.Add(time.Second)
+	inputHash := sha256.Sum256([]byte("tool input"))
+	store := NewStore(pool)
+
+	if _, err := store.ClaimStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, startedAt); err != nil {
+		t.Fatalf("ClaimStep() error = %v", err)
+	}
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), sha256.Sum256([]byte("changed tool input")), json.RawMessage(`{"customer":"changed"}`), completedAt); !errors.Is(err, ErrStepNotRunning) {
+		t.Fatalf("CompleteStep() changed input error = %v, want %v", err, ErrStepNotRunning)
+	}
+
+	checkpoint, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, json.RawMessage(`{"customer":"found"}`), completedAt)
+	if err != nil {
+		t.Fatalf("CompleteStep() error = %v", err)
+	}
+	if checkpoint.Status != StepStatusCompleted || string(checkpoint.Result) != `{"customer": "found"}` || checkpoint.CompletedAt == nil || !checkpoint.CompletedAt.Equal(completedAt) {
+		t.Errorf("CompleteStep() = %#v, want completed checkpoint", checkpoint)
+	}
+	if _, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, json.RawMessage(`{"customer":"changed"}`), completedAt.Add(time.Second)); !errors.Is(err, ErrStepNotRunning) {
+		t.Errorf("CompleteStep() duplicate error = %v, want %v", err, ErrStepNotRunning)
+	}
+}
+
+func TestStoreCompleteStepRejectsInvalidStateOrResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "complete-rejected")
+	startedAt := time.Now().UTC()
+	inputHash := sha256.Sum256([]byte("tool input"))
+	store := NewStore(pool)
+
+	tests := []struct {
+		name   string
+		result json.RawMessage
+		want   error
+	}{
+		{
+			name:   "missing running checkpoint",
+			result: json.RawMessage(`{"customer":"found"}`),
+			want:   ErrStepNotRunning,
+		},
+		{
+			name:   "invalid JSON result",
+			result: json.RawMessage(`{"customer":`),
+			want:   ErrInvalidStepResult,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := store.CompleteStep(ctx, r.ID, run.StepKey("tool/1/lookup"), inputHash, test.result, startedAt.Add(time.Second))
+			if !errors.Is(err, test.want) {
+				t.Fatalf("CompleteStep() error = %v, want %v", err, test.want)
 			}
 		})
 	}

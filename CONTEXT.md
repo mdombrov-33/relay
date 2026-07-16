@@ -34,12 +34,13 @@ lifecycle event, and reads bounded ordered event pages by run or global cursor.
 `make test-integration` connects to the migrated local database and proves
 committed run/event history survives reopening a pool.
 
-The `steps` migration provides a durable, unique checkpoint projection keyed by
-run and step. A row carries a fixed SHA-256 input hash, positive attempt,
-running/completed state, and a completed JSON result.
+The `steps` migration and Store API provide a durable, unique checkpoint
+projection keyed by run and step. A matching completed checkpoint returns its
+JSON result; a live duplicate or changed input is rejected. Completion only
+updates the matching running checkpoint.
 
-Next: add Store operations that claim a named step, return a completed
-checkpoint, and complete an in-flight step atomically.
+Next: add recovery semantics for an interrupted running checkpoint, including a
+new attempt and a restart proof that a completed result is reused.
 
 ## Repository map
 
