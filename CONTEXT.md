@@ -1,112 +1,71 @@
 # Relay project context
 
-## Fast orientation
+## Read order
 
-Relay is a Go runtime for tool-using LLM workflows that will become observable, resumable after process failure, bounded, policy-controlled, and safe to pause for durable human approval.
+This file is the repository-local orientation. For implementation or planning,
+then read the compact external [[Projects/Relay/Relay Harness - Project Playbook]] at
+`../obsidian-notes/Projects/Relay/Relay Harness - Project Playbook.md`. Read only the
+linked curriculum, architecture contract, or decision note needed by the active
+slice; do not preload the whole vault.
 
-The central distinction is:
+## What Relay is
 
-> The model decides what action to propose. The harness owns whether and how that action executes.
+Relay is a Go runtime for tool-using LLM workflows. It will become observable,
+resumable after process failure, bounded, policy-controlled, and safe to pause
+for durable human approval.
 
-This is runtime infrastructure, not a chatbot application or a thin model API wrapper. The final portfolio centerpiece is a visible kill/restart/resume demonstration in which completed work is not replayed and an interrupted side effect produces one logical effect through a stable idempotency key.
+> The model proposes actions. The harness owns validation, authorization,
+> execution, persistence, limits, and observation.
 
-## Source of truth
+The final demo kills and restarts a synthetic support-credit workflow, resumes
+completed work without replay, approves one gated effect, and shows the durable
+event timeline.
 
-The canonical implementation and teaching plan currently lives outside the repository in the accompanying Obsidian vault:
+## Current phase
 
-- `../obsidian-notes/Durable Agent Harness — Project Playbook.md` — decisions, milestones, acceptance criteria, verification ledger, current state, and session handoff.
-- `../obsidian-notes/Harness Engineering.md` — conceptual curriculum and deeper reasoning.
+Milestone 3 is active: PostgreSQL event log and run projection.
 
-Read the playbook completely for architecture or implementation planning. Read only curriculum sections linked by the active milestone unless broader conceptual review is needed. These paths are local to the development workspace; the repository does not currently contain a public copy of either document.
+The repository already has a bounded in-memory model/tool loop, typed redacted
+events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
+18 Compose service, and a ping-verified `pgx/v5` pool. `make test-integration`
+connects to the migrated local database.
 
-## Runtime mental model
+Next: transactionally create a pending run projection and its
+`workflow.queued.v1` event, proving a failed transaction persists neither.
 
-```text
-load run
-  -> hydrate bounded context
-  -> ask the current model for the next action
-  -> validate and authorize the action
-  -> durably record intent
-  -> execute or suspend
-  -> checkpoint the result
-  -> append observable events
-  -> repeat until terminal or bounded limit
-```
-
-Important concepts:
-
-- A command requests a change, such as start, cancel, approve, or reject.
-- An event is an immutable fact that already happened.
-- Run state is the current mutable operational projection.
-- A checkpoint stores the outcome of a named non-deterministic step for recovery.
-- A signal is durable external input correlated to a waiting run.
-- Stable run IDs, step keys, and idempotency keys make recovery behavior explainable.
-
-## System shape
-
-- The execution runtime and HTTP services are written in Go.
-- PostgreSQL stores runs, ordered events, checkpoints, signals, leases, and the synthetic effect ledger.
-- HTTP endpoints separate commands from queries; SSE carries ordered live events and supports reconnect from a cursor.
-- A React and TypeScript inspector renders the runtime as a run list, event timeline, checkpoint detail, and approval surface.
-- Model providers sit behind a small internal Go interface so provider SDK details do not leak into workflow code.
-- Relay owns a deliberately bounded checkpoint engine. Temporal is a comparison point, not an implementation detail hidden inside the core design.
-- The demonstration domain is a synthetic support-credit workflow with differently privileged triage and billing roles.
-
-The project does not claim to be a general Temporal replacement, a hardened multi-tenant sandbox, or an exactly-once external-effects system.
-
-## Repository shape today
+## Repository map
 
 ```text
 cmd/relay/          deterministic in-memory workflow demo
-internal/run/       run identity, status, and guarded lifecycle transitions
-internal/event/     immutable event envelope, typed payloads, and JSON contract
-internal/model/     provider-independent messages, client port, and scripted fake
-internal/tool/      tool contract, registry, and deterministic lookup tools
-internal/workflow/  orchestration of a run through the model boundary
-internal/postgres/  direct pgx pool startup and PostgreSQL integration check
+internal/run/       run identity, status, guarded transitions
+internal/event/     immutable safe event envelope and payloads
+internal/model/     provider-independent port and scripted fake
+internal/tool/      tool contract, registry, deterministic lookups
+internal/workflow/  bounded orchestration loop
+internal/postgres/  direct PostgreSQL pool and integration test
+migrations/         Goose PostgreSQL schema migrations
 ```
 
-The current engine executes an in-memory bounded model/tool loop. It starts the run, requires positive `MaxSteps`, `ModelTimeout`, and `ToolTimeout` limits, checks cancellation before each model turn, and derives a deadline-bound child context for every model or tool call. It executes returned tool calls through the registry and appends assistant plus correlated tool-result messages before the next turn. A response without tool calls completes the run; exhausted step limits and expired call deadlines produce typed failed runs. `go run ./cmd/relay` runs the scripted three-turn success demo; `go run ./cmd/relay -scenario=failed` intentionally exhausts the scripted model and renders the resulting failed-run timeline while exiting successfully. Progress remains in memory: a fresh engine with the same run ID begins pending and repeats the three model turns, as the restart-loss test demonstrates. The `event` package supplies an immutable JSON envelope with a run ID, deterministic step key, versioned type, timestamp, and typed lifecycle/model/tool payloads. Newly emitted payloads are redacted by construction: only safe lifecycle metadata, empty model metadata, and tool call ID/name are permitted; prompts, model text, tool arguments/results/errors, and credentials have no payload type. The constructor rejects encoded payloads above 8 KiB, while unknown historical payload JSON remains inspectable for forward compatibility. The engine requires a process-local in-memory event log and records lifecycle, model, and tool facts in append order; the log is concurrency-safe but not durable. Lifecycle facts use the `workflow` step key, model calls use `model/<turn>`, and tool calls use `tool/<turn>/<call-id>`. The CLI renders each scenario as a compact event timeline containing timestamp, event ID, run ID, step key, versioned type, and safe JSON payload. Milestone 3 now has Goose 3.27.1 as a pinned Go tool, an initial PostgreSQL migration for the current `runs` and append-only `events` schema, and a local `postgres:18-alpine` Compose service named `db`. `make db-up`, `make db-logs`, `make db-shell`, and `make db-reset` manage the disposable local database; `make migrate-validate`, `make migrate-status`, `make migrate-up`, and `make migrate-down` run Goose against its default local URL. The migration file is Goose-validated and the `internal/postgres` package uses direct `pgx/v5` pooling: `Open` validates the DSN, establishes a pool, and pings PostgreSQL before returning. `make test-integration` confirms the local pool reaches the migrated `runs` and `events` tables. Persisting run state and events atomically is the immediate next slice.
+## Guardrails
 
-The existing boundaries already establish several important contracts:
+- Keep the model and tool boundaries replaceable and deterministic in tests.
+- Stable run IDs and step keys make recovery explainable.
+- Events are immutable facts; run state is a mutable projection.
+- Completed checkpoints return recorded results; interrupted external effects
+  can retry and therefore need stable idempotency keys.
+- Full history is durable; model context is reconstructed and bounded.
+- Waiting approval is durable state, never a blocked goroutine.
+- Do not persist credentials or unredacted sensitive model data in events.
+- Do not claim arbitrary exactly-once effects, a hardened sandbox, or a
+  Temporal replacement.
 
-- `model.Client` owns only the provider call. It does not control run state or execute tools.
-- `tool.Tool` exposes a specification and executes a typed call through `context.Context`.
-- `tool.Registry` validates registrations and resolves tools by the model-visible name.
-- `tool.CustomerLookup` and `tool.IncidentLookup` are safe deterministic read-only demo tools with typed argument and not-found failures.
-- `model.Message` can represent system, user, assistant, and correlated tool-result messages.
-- `model.ScriptedClient` makes workflow behavior deterministic and records defensive copies of model requests for transcript assertions.
-- `run.Run` is the authority for legal lifecycle transitions.
-- `event.Envelope` serializes one immutable runtime fact with a typed run and step correlation; its raw payload bytes are defensively copied, and unknown future types remain inspectable as raw JSON.
+## Local commands
 
-When orienting in the codebase, follow behavior through these contracts and their tests instead of inferring architecture from directory names alone.
-
-## Core invariants to preserve
-
-1. Every run has a stable unique identity.
-2. Every non-deterministic operation eventually receives a stable step key.
-3. A completed checkpoint returns its recorded result rather than re-executing.
-4. Tools are resolved through a registry; the model never invokes host functions directly.
-5. Tool authorization and policy are enforced by the harness, not by prompt wording.
-6. Loops, context, payloads, time, and concurrency are bounded.
-7. Waiting approval becomes durable state and must not occupy a goroutine indefinitely.
-8. Full history remains durable even when the model sees bounded context.
-9. External side effects may retry after an ambiguous crash window and therefore require stable idempotency.
-
-## Learner and collaboration context
-
-The learner knows Go basics and has some Go experience, but is still developing confidence with interfaces, goroutines, cancellation, and advanced runtime concepts. By default, the learner types the implementation while the LLM explains the exact edits, flow, rationale, failure cases, and verification. Full patches are appropriate when explicitly requested.
-
-Work proceeds in small verified slices. During a slice, use focused formatting and package tests for quick feedback; before a meaningful Go commit, run the repository gate. After each verified slice, provide a scoped one-line commit message and update the durable playbook.
-
-## Local toolchain
-
-- Go module: `github.com/mdombrov-33/relay`
-- Go policy currently pinned by `go.mod`: Go 1.26.3
-- Local development platform recorded so far: macOS arm64
-- Run: `go run ./cmd/relay`
+- Demo: `go run ./cmd/relay`
 - Unit tests: `make test`
-- Full quality gate: `make check`
-- CI: push to `main`, using the Go version from `go.mod` and golangci-lint v2.12.2
+- Full gate: `make check`
+- Database: `make db-up`, `make migrate-up`, `make test-integration`
+- Default URL: `postgres://relay:relay@localhost:5433/relay?sslmode=disable`
 
-The README is intentionally brief. Use the playbook for changing project state, unresolved decisions, implementation order, and the exact session handoff; keep this file focused on stable orientation.
+The full roadmap, contract detail, and decision rationale live in the linked
+Obsidian notes. Keep this file an orientation snapshot, not a second playbook.

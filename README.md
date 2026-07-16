@@ -27,4 +27,5 @@ database, and `make db-reset` to recreate the disposable local database.
 
 ## Project notes
 
-The implementation plan and learning record live in the accompanying Obsidian playbook: `Durable Agent Harness — Project Playbook.md`.
+The implementation plan and learning record live in the accompanying Obsidian
+playbook: `Projects/Relay/Relay Harness - Project Playbook.md`.

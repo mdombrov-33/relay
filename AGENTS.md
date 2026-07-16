@@ -5,8 +5,8 @@ These instructions apply to the whole repository. They are intentionally short e
 ## Start here
 
 1. Read [`CONTEXT.md`](CONTEXT.md) before proposing work.
-2. For implementation, architecture, or roadmap work, read the complete local playbook at `../obsidian-notes/Durable Agent Harness — Project Playbook.md` when it is available.
-3. Read only the curriculum sections linked by the active milestone in `../obsidian-notes/Harness Engineering.md`, unless the user asks for a broader review.
+2. For implementation, architecture, or roadmap work, read the complete compact playbook at `../obsidian-notes/Projects/Relay/Relay Harness - Project Playbook.md` when it is available.
+3. Then read only the linked reference required by the active slice: its curriculum section in `../obsidian-notes/Harness Engineering.md`, the touched contract in `../obsidian-notes/Projects/Relay/Relay Architecture & Contracts.md`, or a conflicting choice in `../obsidian-notes/Projects/Relay/Relay Decisions.md`.
 4. Inspect the relevant code and tests. Checklists and context snapshots can lag behind the repository.
 
 When guidance conflicts, follow this order: the user's current request, recorded playbook decisions, this file, `CONTEXT.md`, then skill guidance. Surface conflicts instead of choosing silently.
@@ -110,6 +110,6 @@ Use narrow commands while iterating because they return focused feedback quickly
 
 ## Durable handoff
 
-After verified implementation progress, update the playbook's current state, active milestone checklist, verification ledger, decisions, known issues, and exact next action as applicable. Update `CONTEXT.md` when its orientation snapshot or stable architecture facts change. Never mark work complete from intention alone.
+After verified implementation progress, update the playbook's active milestone checklist and compact current state; update `../obsidian-notes/Projects/Relay/Relay Decisions.md` only for a material choice. Do not append a verification ledger or session diary: repository tests and Git history are the detailed evidence. Update `CONTEXT.md` when its orientation snapshot or stable architecture facts change. Never mark work complete from intention alone.
 
 Keep this file maintainable: add a permanent rule only when it is project-wide, repeatedly useful, and not better expressed as a test, formatter, linter, hook, path-scoped instruction, or on-demand skill.
