@@ -245,7 +245,7 @@ func (e Engine) executeTool(ctx context.Context, runID run.ID, stepKey run.StepK
 		toolCtx, cancel := context.WithTimeout(ctx, e.ToolTimeout)
 		defer cancel()
 
-		return executable.Execute(toolCtx, call)
+		return executable.Execute(toolCtx, tool.Execution{RunID: runID, StepKey: stepKey, Call: call})
 	}
 
 	input, err := json.Marshal(call)
@@ -257,7 +257,7 @@ func (e Engine) executeTool(ctx context.Context, runID run.ID, stepKey run.StepK
 		toolCtx, cancel := context.WithTimeout(stepCtx, e.ToolTimeout)
 		defer cancel()
 
-		output, err := executable.Execute(toolCtx, call)
+		output, err := executable.Execute(toolCtx, tool.Execution{RunID: runID, StepKey: stepKey, Call: call})
 		if err != nil {
 			return nil, err
 		}

@@ -45,13 +45,13 @@ func (t *IncidentLookup) Spec() Spec {
 	}
 }
 
-func (t *IncidentLookup) Execute(ctx context.Context, call Call) (Output, error) {
+func (t *IncidentLookup) Execute(ctx context.Context, execution Execution) (Output, error) {
 	if err := ctx.Err(); err != nil {
 		return Output{}, err
 	}
 
 	var arguments lookupIncidentArgs
-	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
+	if err := json.Unmarshal(execution.Arguments, &arguments); err != nil {
 		return Output{}, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
 	}
 	if arguments.IncidentID == "" {

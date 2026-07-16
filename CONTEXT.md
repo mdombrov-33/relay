@@ -51,12 +51,14 @@ sequence returns its durable results without calling the recovered model client
 or tool executable.
 
 The `effects` ledger records one completed synthetic effect for a global stable
-idempotency key. Its Store API returns the original record on a matching
-duplicate and rejects a key reused for a different effect identity. It does not
-hide the crash window before an external effect is recorded.
+idempotency key. Tool execution receives harness-owned run and step identity;
+the synthetic `issue_credit` tool derives its key from that identity and returns
+the original recorded credit on recovery. An integration test interrupts after
+the first credit record but before its tool checkpoint completes, reopens the
+pool, and proves retry completes attempt two with one logical credit.
 
-Next: wire the synthetic `issue_credit` effect through the ledger and prove a
-retry with the same stable key creates one logical credit.
+Next: begin M6 with a pure bounded-context hydrator that preserves pinned input
+and recent messages while separating durable history from model context.
 
 ## Repository map
 

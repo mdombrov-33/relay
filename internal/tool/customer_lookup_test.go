@@ -23,11 +23,11 @@ func TestCustomerLookupExecutes(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 
-	result, err := lookup.Execute(context.Background(), Call{
+	result, err := lookup.Execute(context.Background(), Execution{Call: Call{
 		ID:        "call_123",
 		Name:      "lookup_customer",
 		Arguments: arguments,
-	})
+	}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -45,10 +45,10 @@ func TestCustomerLookupExecutes(t *testing.T) {
 func TestCustomerLookupRejectsMalformedArguments(t *testing.T) {
 	lookup := NewCustomerLookup()
 
-	_, err := lookup.Execute(context.Background(), Call{
+	_, err := lookup.Execute(context.Background(), Execution{Call: Call{
 		Name:      "lookup_customer",
 		Arguments: json.RawMessage(`{"customer_id":`),
-	})
+	}})
 
 	if !errors.Is(err, ErrInvalidArguments) {
 		t.Errorf("Execute() error = %v, want ErrInvalidArguments", err)
@@ -58,10 +58,10 @@ func TestCustomerLookupRejectsMalformedArguments(t *testing.T) {
 func TestCustomerLookupRejectsMissingCustomerID(t *testing.T) {
 	lookup := NewCustomerLookup()
 
-	_, err := lookup.Execute(context.Background(), Call{
+	_, err := lookup.Execute(context.Background(), Execution{Call: Call{
 		Name:      "lookup_customer",
 		Arguments: json.RawMessage(`{}`),
-	})
+	}})
 
 	if !errors.Is(err, ErrInvalidArguments) {
 		t.Errorf("Execute() error = %v, want ErrInvalidArguments", err)
@@ -78,10 +78,10 @@ func TestCustomerLookupReturnsNotFoundError(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 
-	_, err = lookup.Execute(context.Background(), Call{
+	_, err = lookup.Execute(context.Background(), Execution{Call: Call{
 		Name:      "lookup_customer",
 		Arguments: arguments,
-	})
+	}})
 
 	if !errors.Is(err, ErrCustomerNotFound) {
 		t.Errorf("Execute() error = %v, want ErrCustomerNotFound", err)

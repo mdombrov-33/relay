@@ -35,7 +35,7 @@ func (t blockingTool) Spec() tool.Spec {
 	return t.spec
 }
 
-func (blockingTool) Execute(ctx context.Context, _ tool.Call) (tool.Output, error) {
+func (blockingTool) Execute(ctx context.Context, _ tool.Execution) (tool.Output, error) {
 	<-ctx.Done()
 	return tool.Output{}, ctx.Err()
 }
@@ -52,7 +52,7 @@ func (t *countingTool) Spec() tool.Spec {
 	return t.spec
 }
 
-func (t *countingTool) Execute(context.Context, tool.Call) (tool.Output, error) {
+func (t *countingTool) Execute(context.Context, tool.Execution) (tool.Output, error) {
 	t.calls++
 	return t.output, nil
 }

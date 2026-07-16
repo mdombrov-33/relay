@@ -24,11 +24,11 @@ func TestIncidentLookupExecutes(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 
-	result, err := lookup.Execute(context.Background(), Call{
+	result, err := lookup.Execute(context.Background(), Execution{Call: Call{
 		ID:        "call_123",
 		Name:      "lookup_incident",
 		Arguments: arguments,
-	})
+	}})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -46,10 +46,10 @@ func TestIncidentLookupExecutes(t *testing.T) {
 func TestIncidentLookupRejectsMalformedArguments(t *testing.T) {
 	lookup := NewIncidentLookup()
 
-	_, err := lookup.Execute(context.Background(), Call{
+	_, err := lookup.Execute(context.Background(), Execution{Call: Call{
 		Name:      "lookup_incident",
 		Arguments: json.RawMessage(`{"incident_id":`),
-	})
+	}})
 
 	if !errors.Is(err, ErrInvalidArguments) {
 		t.Errorf("Execute() error = %v, want ErrInvalidArguments", err)
@@ -59,10 +59,10 @@ func TestIncidentLookupRejectsMalformedArguments(t *testing.T) {
 func TestIncidentLookupRejectsMissingIncidentID(t *testing.T) {
 	lookup := NewIncidentLookup()
 
-	_, err := lookup.Execute(context.Background(), Call{
+	_, err := lookup.Execute(context.Background(), Execution{Call: Call{
 		Name:      "lookup_incident",
 		Arguments: json.RawMessage(`{}`),
-	})
+	}})
 
 	if !errors.Is(err, ErrInvalidArguments) {
 		t.Errorf("Execute() error = %v, want ErrInvalidArguments", err)
@@ -79,10 +79,10 @@ func TestIncidentLookupReturnsNotFoundError(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 
-	_, err = lookup.Execute(context.Background(), Call{
+	_, err = lookup.Execute(context.Background(), Execution{Call: Call{
 		Name:      "lookup_incident",
 		Arguments: arguments,
-	})
+	}})
 
 	if !errors.Is(err, ErrIncidentNotFound) {
 		t.Errorf("Execute() error = %v, want ErrIncidentNotFound", err)

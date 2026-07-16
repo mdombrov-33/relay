@@ -14,7 +14,7 @@ func (f fakeTool) Spec() Spec {
 	return f.spec
 }
 
-func (f fakeTool) Execute(context.Context, Call) (Output, error) {
+func (f fakeTool) Execute(context.Context, Execution) (Output, error) {
 	return Output{}, nil
 }
 

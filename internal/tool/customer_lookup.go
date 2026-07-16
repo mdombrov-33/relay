@@ -47,13 +47,13 @@ func (t *CustomerLookup) Spec() Spec {
 	}
 }
 
-func (t *CustomerLookup) Execute(ctx context.Context, call Call) (Output, error) {
+func (t *CustomerLookup) Execute(ctx context.Context, execution Execution) (Output, error) {
 	if err := ctx.Err(); err != nil {
 		return Output{}, err
 	}
 
 	var arguments lookupCustomerArgs
-	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
+	if err := json.Unmarshal(execution.Arguments, &arguments); err != nil {
 		return Output{}, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
 	}
 	if arguments.CustomerID == "" {
