@@ -22,7 +22,7 @@ volume, recreates it, and starts PostgreSQL again; it must never be used for a
 database with data worth keeping.
 
 The default local connection is
-`postgres://relay:relay@localhost:5433/relay?sslmode=disable`. Override
+`postgres://relay:relay@localhost:5434/relay?sslmode=disable`. Override
 `DATABASE_URL` when connecting to another PostgreSQL instance.
 
 Each numbered `.sql` file has a `-- +goose Up` section and a matching

@@ -23,7 +23,8 @@ event timeline.
 
 ## Current phase
 
-Milestone 3 is active: PostgreSQL event log and run projection.
+Milestone 3 is complete. Milestone 4, checkpointed steps and crash recovery,
+is next.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
@@ -33,12 +34,13 @@ lifecycle event, and reads bounded ordered event pages by run or global cursor.
 `make test-integration` connects to the migrated local database and proves
 committed run/event history survives reopening a pool.
 
-Next: add a small read-only `relayctl` event inspection command.
+Next: begin M4 with a durable step-checkpoint projection keyed by run and step.
 
 ## Repository map
 
 ```text
 cmd/relay/          deterministic in-memory workflow demo
+cmd/relayctl/       read-only PostgreSQL event inspection command
 internal/run/       run identity, status, guarded transitions
 internal/event/     immutable safe event envelope and payloads
 internal/model/     provider-independent port and scripted fake
@@ -64,6 +66,7 @@ migrations/         Goose PostgreSQL schema migrations
 ## Local commands
 
 - Demo: `go run ./cmd/relay`
+- Event inspection: `make relayctl ARGS='events'`
 - Unit tests: `make test`
 - Full gate: `make check`
 - Database: `make db-up`, `make migrate-up`, `make test-integration`

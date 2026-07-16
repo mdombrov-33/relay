@@ -6,7 +6,7 @@ DB_SERVICE ?= db
 MIGRATIONS_DIR := migrations
 DATABASE_URL ?= postgres://relay:relay@localhost:5434/relay?sslmode=disable
 
-.PHONY: check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate test test-integration test-race
+.PHONY: check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate relayctl test test-integration test-race
 
 check: test test-race lint
 
@@ -24,6 +24,9 @@ test-race:
 
 test-integration:
 	DATABASE_URL="$(DATABASE_URL)" $(GO) test -tags=integration ./internal/postgres
+
+relayctl:
+	DATABASE_URL="$(DATABASE_URL)" $(GO) run ./cmd/relayctl $(ARGS)
 
 db-up:
 	$(COMPOSE) up -d --wait --remove-orphans $(DB_SERVICE)
