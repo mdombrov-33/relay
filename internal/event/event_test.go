@@ -76,6 +76,15 @@ func TestNewEncodesTypedPayloads(t *testing.T) {
 			expected: `{"callId":"call-123","toolName":"issue_credit"}`,
 		},
 		{
+			name: "approval resolution",
+			typ:  event.TypeApprovalResolved,
+			payload: event.ApprovalPayload{
+				RequestID: "approval-123",
+				Approved:  true,
+			},
+			expected: `{"requestId":"approval-123","approved":true}`,
+		},
+		{
 			name: "memory",
 			typ:  event.TypeMemoryCompacted,
 			payload: event.MemoryPayload{

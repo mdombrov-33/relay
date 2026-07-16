@@ -331,6 +331,210 @@ func TestStoreRequestApprovalRollsBackWhenEventInsertFails(t *testing.T) {
 	}
 }
 
+func TestStoreResolveApproval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	tests := []struct {
+		name     string
+		decision ApprovalDecision
+		approved bool
+	}{
+		{name: "approved", decision: ApprovalDecisionApproved, approved: true},
+		{name: "rejected", decision: ApprovalDecisionRejected, approved: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r, request := waitingApprovalIntegrationRun(t, pool, ctx, "resolved-"+test.name)
+			signal := ApprovalSignal{
+				ID:        "signal-" + string(r.ID),
+				RequestID: request.ID,
+				RunID:     r.ID,
+				Decision:  test.decision,
+			}
+			resolved := newApprovalResolvedEvent(t, integrationEventID(t, "approval-resolved-"+test.name), request.StepKey, signal, test.approved)
+
+			created, err := NewStore(pool).ResolveApproval(ctx, signal, resolved)
+			if err != nil {
+				t.Fatalf("ResolveApproval() error = %v", err)
+			}
+			if !created {
+				t.Fatal("ResolveApproval() created = false, want true")
+			}
+
+			var (
+				runStatus      run.Status
+				runUpdatedAt   time.Time
+				requestStatus  ApprovalStatus
+				resolvedAt     *time.Time
+				signalID       string
+				signalDecision ApprovalDecision
+				receivedAt     time.Time
+			)
+			if err := pool.QueryRow(ctx, "SELECT status, updated_at FROM runs WHERE id = $1", r.ID).Scan(&runStatus, &runUpdatedAt); err != nil {
+				t.Fatalf("query resumed run: %v", err)
+			}
+			if err := pool.QueryRow(ctx, "SELECT status, resolved_at FROM approval_requests WHERE id = $1", request.ID).Scan(&requestStatus, &resolvedAt); err != nil {
+				t.Fatalf("query resolved approval request: %v", err)
+			}
+			if err := pool.QueryRow(
+				ctx,
+				"SELECT id, decision, received_at FROM approval_signals WHERE request_id = $1",
+				request.ID,
+			).Scan(&signalID, &signalDecision, &receivedAt); err != nil {
+				t.Fatalf("query approval signal: %v", err)
+			}
+
+			if runStatus != run.StatusRunning || !runUpdatedAt.Equal(resolved.OccurredAt()) {
+				t.Errorf("resumed run = (%q, %s), want (%q, %s)", runStatus, runUpdatedAt, run.StatusRunning, resolved.OccurredAt())
+			}
+			if requestStatus != ApprovalStatus(test.decision) || resolvedAt == nil || !resolvedAt.Equal(resolved.OccurredAt()) {
+				t.Errorf("resolved request = (%q, %v), want (%q, %s)", requestStatus, resolvedAt, test.decision, resolved.OccurredAt())
+			}
+			if signalID != signal.ID || signalDecision != signal.Decision || !receivedAt.Equal(resolved.OccurredAt()) {
+				t.Errorf("stored signal = (%q, %q, %s), want (%q, %q, %s)", signalID, signalDecision, receivedAt, signal.ID, signal.Decision, resolved.OccurredAt())
+			}
+
+			stored, err := NewStore(pool).ListRunEvents(ctx, r.ID, 0)
+			if err != nil {
+				t.Fatalf("ListRunEvents() error = %v", err)
+			}
+			if len(stored) != 2 || stored[1].ID() != resolved.ID() || stored[1].Type() != event.TypeApprovalResolved {
+				t.Errorf("approval events = %#v, want request followed by %q", stored, resolved.ID())
+			}
+		})
+	}
+}
+
+func TestStoreResolveApprovalIsIdempotentAndRejectsConflict(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r, request := waitingApprovalIntegrationRun(t, pool, ctx, "resolution-idempotent")
+	first := ApprovalSignal{
+		ID:        "signal-first-" + string(r.ID),
+		RequestID: request.ID,
+		RunID:     r.ID,
+		Decision:  ApprovalDecisionApproved,
+	}
+	firstEvent := newApprovalResolvedEvent(t, integrationEventID(t, "approval-resolved-first"), request.StepKey, first, true)
+	store := NewStore(pool)
+	if created, err := store.ResolveApproval(ctx, first, firstEvent); err != nil || !created {
+		t.Fatalf("ResolveApproval() first = (%v, %v), want (true, nil)", created, err)
+	}
+
+	duplicate := first
+	duplicate.ID = "signal-duplicate-" + string(r.ID)
+	duplicateEvent := newApprovalResolvedEvent(t, integrationEventID(t, "approval-resolved-duplicate"), request.StepKey, duplicate, true)
+	if created, err := store.ResolveApproval(ctx, duplicate, duplicateEvent); err != nil || created {
+		t.Fatalf("ResolveApproval() duplicate = (%v, %v), want (false, nil)", created, err)
+	}
+
+	conflict := duplicate
+	conflict.ID = "signal-conflict-" + string(r.ID)
+	conflict.Decision = ApprovalDecisionRejected
+	conflictEvent := newApprovalResolvedEvent(t, integrationEventID(t, "approval-resolved-conflict"), request.StepKey, conflict, false)
+	if _, err := store.ResolveApproval(ctx, conflict, conflictEvent); !errors.Is(err, ErrApprovalDecisionConflict) {
+		t.Fatalf("ResolveApproval() conflict error = %v, want %v", err, ErrApprovalDecisionConflict)
+	}
+
+	var signalCount, resolvedEventCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM approval_signals WHERE request_id = $1", request.ID).Scan(&signalCount); err != nil {
+		t.Fatalf("count approval signals: %v", err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM events WHERE run_id = $1 AND type = $2", r.ID, event.TypeApprovalResolved).Scan(&resolvedEventCount); err != nil {
+		t.Fatalf("count approval resolved events: %v", err)
+	}
+	if signalCount != 1 || resolvedEventCount != 1 {
+		t.Errorf("durable resolution records = %d signals, %d events; want one each", signalCount, resolvedEventCount)
+	}
+}
+
+func TestStoreResolveApprovalRejectsMismatchedRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	waitingRun, request := waitingApprovalIntegrationRun(t, pool, ctx, "resolution-mismatch-waiting")
+	otherRun := runningIntegrationRun(t, pool, ctx, "resolution-mismatch-other")
+	signal := ApprovalSignal{
+		ID:        "signal-" + string(otherRun.ID),
+		RequestID: request.ID,
+		RunID:     otherRun.ID,
+		Decision:  ApprovalDecisionApproved,
+	}
+	resolved := newApprovalResolvedEvent(t, integrationEventID(t, "approval-resolved-mismatch"), request.StepKey, signal, true)
+
+	if _, err := NewStore(pool).ResolveApproval(ctx, signal, resolved); !errors.Is(err, ErrApprovalSignalRunIDMismatch) {
+		t.Fatalf("ResolveApproval() error = %v, want %v", err, ErrApprovalSignalRunIDMismatch)
+	}
+
+	for _, expected := range []struct {
+		id     run.ID
+		status run.Status
+	}{
+		{id: waitingRun.ID, status: run.StatusWaiting},
+		{id: otherRun.ID, status: run.StatusRunning},
+	} {
+		var status run.Status
+		if err := pool.QueryRow(ctx, "SELECT status FROM runs WHERE id = $1", expected.id).Scan(&status); err != nil {
+			t.Fatalf("query unchanged run %q: %v", expected.id, err)
+		}
+		if status != expected.status {
+			t.Errorf("run %q status = %q, want %q", expected.id, status, expected.status)
+		}
+	}
+}
+
+func TestStoreResolveApprovalRollsBackWhenEventInsertFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r, request := waitingApprovalIntegrationRun(t, pool, ctx, "resolution-rolled-back")
+	signal := ApprovalSignal{
+		ID:        "signal-" + string(r.ID),
+		RequestID: request.ID,
+		RunID:     r.ID,
+		Decision:  ApprovalDecisionApproved,
+	}
+	resolved := newApprovalResolvedEvent(t, "", request.StepKey, signal, true)
+
+	if _, err := NewStore(pool).ResolveApproval(ctx, signal, resolved); err == nil {
+		t.Fatal("ResolveApproval() error = nil, want event insert failure")
+	}
+
+	var (
+		runStatus     run.Status
+		requestStatus ApprovalStatus
+		resolvedAt    *time.Time
+		signalCount   int
+	)
+	if err := pool.QueryRow(ctx, "SELECT status FROM runs WHERE id = $1", r.ID).Scan(&runStatus); err != nil {
+		t.Fatalf("query rolled-back run: %v", err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT status, resolved_at FROM approval_requests WHERE id = $1", request.ID).Scan(&requestStatus, &resolvedAt); err != nil {
+		t.Fatalf("query rolled-back approval request: %v", err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM approval_signals WHERE request_id = $1", request.ID).Scan(&signalCount); err != nil {
+		t.Fatalf("count rolled-back approval signals: %v", err)
+	}
+	if runStatus != run.StatusWaiting || requestStatus != ApprovalStatusPending || resolvedAt != nil || signalCount != 0 {
+		t.Errorf("rolled-back resolution = (%q, %q, %v, %d signals), want waiting, pending, nil, zero", runStatus, requestStatus, resolvedAt, signalCount)
+	}
+}
+
 func TestStoreListRunEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1011,6 +1215,46 @@ func newApprovalRequestedEvent(t *testing.T, eventID string, request ApprovalReq
 	}
 
 	return envelope
+}
+
+func newApprovalResolvedEvent(t *testing.T, eventID string, stepKey run.StepKey, signal ApprovalSignal, approved bool) event.Envelope {
+	t.Helper()
+
+	envelope, err := event.New(
+		eventID,
+		signal.RunID,
+		stepKey,
+		event.TypeApprovalResolved,
+		time.Now().UTC(),
+		event.ApprovalPayload{RequestID: signal.RequestID, Approved: approved},
+	)
+	if err != nil {
+		t.Fatalf("new approval resolved event: %v", err)
+	}
+
+	return envelope
+}
+
+func waitingApprovalIntegrationRun(t *testing.T, pool *pgxpool.Pool, ctx context.Context, suffix string) (run.Run, ApprovalRequest) {
+	t.Helper()
+
+	r := runningIntegrationRun(t, pool, ctx, suffix)
+	if err := r.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	request := ApprovalRequest{
+		ID:       "approval-" + string(r.ID),
+		RunID:    r.ID,
+		StepKey:  run.StepKey("tool/1/issue-credit"),
+		CallID:   "call-" + string(r.ID),
+		ToolName: "issue_credit",
+	}
+	requested := newApprovalRequestedEvent(t, integrationEventID(t, "approval-requested-"+suffix), request)
+	if err := NewStore(pool).RequestApproval(ctx, r, request, requested); err != nil {
+		t.Fatalf("RequestApproval() error = %v", err)
+	}
+
+	return r, request
 }
 
 func runningIntegrationRun(t *testing.T, pool *pgxpool.Pool, ctx context.Context, suffix string) run.Run {

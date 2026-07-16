@@ -97,8 +97,14 @@ atomically inserts a safe pending request, transitions only a running run to
 waiting, and appends its matching `approval.requested.v1` event. An injected
 event-insert failure proves all three writes roll back together.
 
-Next: persist one approval decision signal and atomically resolve and resume
-only its matching pending request and waiting run.
+Goose migration `000005` adds one durable approval signal per request. The
+Store locks the pending request, records the first approved or rejected
+decision, resolves the request, resumes only its matching waiting run, and
+appends `approval.resolved.v1` in one transaction. Repeated matching decisions
+are idempotent; conflicting decisions fail explicitly.
+
+Next: connect durable approval state to the workflow so a gated tool executes
+only after an approved signal and a rejected signal returns a safe denial.
 
 ## Repository map
 

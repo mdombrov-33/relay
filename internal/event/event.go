@@ -37,6 +37,7 @@ const (
 	TypeToolFailed        Type = "tool.failed.v1"
 	TypeToolDenied        Type = "tool.denied.v1"
 	TypeApprovalRequested Type = "approval.requested.v1"
+	TypeApprovalResolved  Type = "approval.resolved.v1"
 	TypeMemoryCompacted   Type = "memory.compacted.v1"
 )
 
@@ -60,6 +61,13 @@ type ToolPayload struct {
 }
 
 func (ToolPayload) isPayload() {}
+
+type ApprovalPayload struct {
+	RequestID string `json:"requestId"`
+	Approved  bool   `json:"approved"`
+}
+
+func (ApprovalPayload) isPayload() {}
 
 type MemoryPayload struct {
 	EvictedMessages  int `json:"evictedMessages"`
