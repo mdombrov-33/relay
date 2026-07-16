@@ -10,6 +10,18 @@ import (
 type Spec struct {
 	Name        string
 	Description string
+	Authority   Authority
+}
+
+type Authority string
+
+const (
+	AuthorityRead   Authority = "read"
+	AuthorityEffect Authority = "effect"
+)
+
+func (a Authority) Valid() bool {
+	return a == AuthorityRead || a == AuthorityEffect
 }
 
 type Call struct {

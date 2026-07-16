@@ -31,7 +31,7 @@ const (
 )
 
 type ToolPolicy interface {
-	Decide(tool.Call) policy.Decision
+	Decide(tool.Spec) policy.Decision
 }
 
 type Engine struct {
@@ -216,7 +216,7 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 		for _, call := range response.ToolCalls {
 			toolStepKey := run.StepKey(fmt.Sprintf("tool/%d/%s", step+1, call.ID))
 			payload := event.ToolPayload{CallID: call.ID, ToolName: call.Name}
-			if e.toolDecision(call) != policy.DecisionAllow {
+			if e.ToolPolicy == nil {
 				if err := e.record(r, toolStepKey, event.TypeToolDenied, payload); err != nil {
 					return model.Response{}, err
 				}
@@ -237,6 +237,32 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 				}
 
 				return model.Response{}, fmt.Errorf("lookup tool: %w", ErrToolsNotConfigured)
+			}
+			spec, err := e.Tools.Spec(call.Name)
+			if err != nil {
+				if recordErr := e.record(r, toolStepKey, event.TypeToolFailed, payload); recordErr != nil {
+					return model.Response{}, recordErr
+				}
+				if failErr := r.Fail(); failErr != nil {
+					return model.Response{}, fmt.Errorf("fail run after tool metadata lookup error: %w", failErr)
+				}
+				if recordErr := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); recordErr != nil {
+					return model.Response{}, recordErr
+				}
+
+				return model.Response{}, fmt.Errorf("lookup tool metadata %q: %w", call.Name, err)
+			}
+			if e.toolDecision(spec) != policy.DecisionAllow {
+				if err := e.record(r, toolStepKey, event.TypeToolDenied, payload); err != nil {
+					return model.Response{}, err
+				}
+				history = append(history, model.NewToolMessage(tool.Result{
+					CallID:   call.ID,
+					ToolName: call.Name,
+					Content:  deniedToolResult,
+				}))
+
+				continue
 			}
 			if err := e.record(r, toolStepKey, event.TypeToolRequested, payload); err != nil {
 				return model.Response{}, err
@@ -304,12 +330,12 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	return model.Response{}, fmt.Errorf("execute workflow: %w", ErrStepLimitExceeded)
 }
 
-func (e Engine) toolDecision(call tool.Call) policy.Decision {
+func (e Engine) toolDecision(spec tool.Spec) policy.Decision {
 	if e.ToolPolicy == nil {
 		return policy.DecisionDeny
 	}
 
-	return e.ToolPolicy.Decide(call)
+	return e.ToolPolicy.Decide(spec)
 }
 
 func pinnedWithSummary(pinned []model.Message, summary SummaryState) []model.Message {

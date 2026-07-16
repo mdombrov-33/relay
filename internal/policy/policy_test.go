@@ -7,34 +7,34 @@ import (
 )
 
 func TestAllowlistDecide(t *testing.T) {
-	allowlist := NewAllowlist("lookup_customer", "lookup_incident")
+	allowlist := NewAllowlist(tool.AuthorityRead)
 
 	tests := []struct {
 		name string
-		call tool.Call
+		spec tool.Spec
 		want Decision
 	}{
 		{
-			name: "allows listed tool",
-			call: tool.Call{Name: "lookup_customer"},
+			name: "allows listed authority",
+			spec: tool.Spec{Authority: tool.AuthorityRead},
 			want: DecisionAllow,
 		},
 		{
-			name: "denies unlisted tool",
-			call: tool.Call{Name: "issue_credit"},
+			name: "denies unlisted authority",
+			spec: tool.Spec{Authority: tool.AuthorityEffect},
 			want: DecisionDeny,
 		},
 		{
-			name: "denies empty tool name",
-			call: tool.Call{},
+			name: "denies empty authority",
+			spec: tool.Spec{},
 			want: DecisionDeny,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := allowlist.Decide(test.call); got != test.want {
-				t.Errorf("Decide(%q) = %q, want %q", test.call.Name, got, test.want)
+			if got := allowlist.Decide(test.spec); got != test.want {
+				t.Errorf("Decide(%q) = %q, want %q", test.spec.Authority, got, test.want)
 			}
 		})
 	}
@@ -43,7 +43,7 @@ func TestAllowlistDecide(t *testing.T) {
 func TestAllowlistZeroValueDenies(t *testing.T) {
 	var allowlist Allowlist
 
-	if got := allowlist.Decide(tool.Call{Name: "lookup_customer"}); got != DecisionDeny {
+	if got := allowlist.Decide(tool.Spec{Authority: tool.AuthorityRead}); got != DecisionDeny {
 		t.Errorf("zero Allowlist decision = %q, want %q", got, DecisionDeny)
 	}
 }

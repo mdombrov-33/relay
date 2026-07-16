@@ -46,6 +46,7 @@ func (t *IssueCredit) Spec() Spec {
 	return Spec{
 		Name:        "issue_credit",
 		Description: "Issues a synthetic support credit",
+		Authority:   AuthorityEffect,
 	}
 }
 

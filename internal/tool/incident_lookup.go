@@ -42,6 +42,7 @@ func (t *IncidentLookup) Spec() Spec {
 	return Spec{
 		Name:        "lookup_incident",
 		Description: "Looks up an incident by ID",
+		Authority:   AuthorityRead,
 	}
 }
 

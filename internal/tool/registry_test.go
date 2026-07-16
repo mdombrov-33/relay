@@ -25,6 +25,7 @@ func TestRegistryLookup(t *testing.T) {
 		spec: Spec{
 			Name:        "lookup_customer",
 			Description: "Looks up a customer",
+			Authority:   AuthorityRead,
 		},
 	}
 
@@ -44,8 +45,8 @@ func TestRegistryLookup(t *testing.T) {
 }
 
 func TestNewRegistryRejectsDuplicateNames(t *testing.T) {
-	first := fakeTool{spec: Spec{Name: "lookup_customer"}}
-	second := fakeTool{spec: Spec{Name: "lookup_customer"}}
+	first := fakeTool{spec: Spec{Name: "lookup_customer", Authority: AuthorityRead}}
+	second := fakeTool{spec: Spec{Name: "lookup_customer", Authority: AuthorityRead}}
 
 	_, err := NewRegistry(first, second)
 
@@ -55,10 +56,34 @@ func TestNewRegistryRejectsDuplicateNames(t *testing.T) {
 }
 
 func TestNewRegistryRejectsEmptyName(t *testing.T) {
-	_, err := NewRegistry(fakeTool{spec: Spec{}})
+	_, err := NewRegistry(fakeTool{spec: Spec{Authority: AuthorityRead}})
 
 	if !errors.Is(err, ErrInvalidToolName) {
 		t.Errorf("NewRegistry() error = %v, want ErrInvalidToolName", err)
+	}
+}
+
+func TestNewRegistryRejectsInvalidAuthority(t *testing.T) {
+	_, err := NewRegistry(fakeTool{spec: Spec{Name: "lookup_customer"}})
+
+	if !errors.Is(err, ErrInvalidToolAuthority) {
+		t.Errorf("NewRegistry() error = %v, want ErrInvalidToolAuthority", err)
+	}
+}
+
+func TestRegistrySpecReturnsRegisteredMetadata(t *testing.T) {
+	lookup := fakeTool{spec: Spec{Name: "lookup_customer", Authority: AuthorityRead}}
+	registry, err := NewRegistry(lookup)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	got, err := registry.Spec("lookup_customer")
+	if err != nil {
+		t.Fatalf("Spec() error = %v", err)
+	}
+	if got != lookup.spec {
+		t.Errorf("Spec() = %#v, want %#v", got, lookup.spec)
 	}
 }
 

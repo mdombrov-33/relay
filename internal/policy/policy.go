@@ -10,22 +10,22 @@ const (
 )
 
 type Allowlist struct {
-	toolNames map[string]struct{}
+	authorities map[tool.Authority]struct{}
 }
 
-func NewAllowlist(toolNames ...string) Allowlist {
-	allowed := make(map[string]struct{}, len(toolNames))
-	for _, toolName := range toolNames {
-		if toolName != "" {
-			allowed[toolName] = struct{}{}
+func NewAllowlist(authorities ...tool.Authority) Allowlist {
+	allowed := make(map[tool.Authority]struct{}, len(authorities))
+	for _, authority := range authorities {
+		if authority.Valid() {
+			allowed[authority] = struct{}{}
 		}
 	}
 
-	return Allowlist{toolNames: allowed}
+	return Allowlist{authorities: allowed}
 }
 
-func (a Allowlist) Decide(call tool.Call) Decision {
-	if _, allowed := a.toolNames[call.Name]; allowed {
+func (a Allowlist) Decide(spec tool.Spec) Decision {
+	if _, allowed := a.authorities[spec.Authority]; allowed {
 		return DecisionAllow
 	}
 

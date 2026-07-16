@@ -44,6 +44,7 @@ func (t *CustomerLookup) Spec() Spec {
 	return Spec{
 		Name:        "lookup_customer",
 		Description: "Looks up a customer by ID",
+		Authority:   AuthorityRead,
 	}
 }
 

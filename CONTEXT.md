@@ -79,8 +79,13 @@ Before a later model turn it summarizes an evicted prefix through a stable
 original pins plus the summary plus that suffix. It records a safe-count-only
 `memory.compacted.v1` event; summary text and history never enter the event.
 
-Next: enrich registered tool metadata so policy evaluates declared authority,
-not only a model-proposed tool name.
+Registered tools now declare validated `read` or `effect` authority. The engine
+retrieves stored registry metadata for a configured policy before executable
+resolution, so `policy.Allowlist` decides declared authority rather than a
+model-proposed name; missing policy remains deny by default.
+
+Next: add an explicit non-executing approval-required policy decision before
+M8 makes approvals durable.
 
 ## Repository map
 

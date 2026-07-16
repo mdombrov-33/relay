@@ -76,7 +76,7 @@ func runSuccessfulDemo() {
 		Client:             client,
 		Events:             events,
 		Tools:              tools,
-		ToolPolicy:         policy.NewAllowlist("lookup_customer", "lookup_incident"),
+		ToolPolicy:         policy.NewAllowlist(tool.AuthorityRead),
 		MaxSteps:           3,
 		ModelTimeout:       time.Second,
 		ToolTimeout:        time.Second,

@@ -58,6 +58,12 @@ func (t *countingTool) Execute(context.Context, tool.Execution) (tool.Output, er
 	return t.output, nil
 }
 
+func TestEngineToolDecisionDefaultsToDeny(t *testing.T) {
+	if got := (Engine{}).toolDecision(tool.Spec{Authority: tool.AuthorityRead}); got != policy.DecisionDeny {
+		t.Errorf("toolDecision() = %q, want %q", got, policy.DecisionDeny)
+	}
+}
+
 func TestEngineExecute(t *testing.T) {
 	t.Run("requires an event log before starting the run", func(t *testing.T) {
 		r := run.New("run-123")
@@ -227,7 +233,7 @@ func TestEngineExecute(t *testing.T) {
 			Client:       client,
 			Events:       events,
 			Tools:        registry,
-			ToolPolicy:   policy.NewAllowlist("lookup_customer"),
+			ToolPolicy:   policy.NewAllowlist(tool.AuthorityRead),
 			MaxSteps:     2,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -342,7 +348,7 @@ func TestEngineExecute(t *testing.T) {
 			Client:       client,
 			Events:       event.NewLog(),
 			Tools:        registry,
-			ToolPolicy:   policy.NewAllowlist("lookup_customer"),
+			ToolPolicy:   policy.NewAllowlist(tool.AuthorityRead),
 			MaxSteps:     1,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -408,7 +414,7 @@ func TestEngineExecute(t *testing.T) {
 			Client:       client,
 			Events:       events,
 			Tools:        registry,
-			ToolPolicy:   policy.NewAllowlist("lookup_customer", "lookup_incident"),
+			ToolPolicy:   policy.NewAllowlist(tool.AuthorityRead),
 			MaxSteps:     3,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -526,6 +532,7 @@ func TestEngineExecute(t *testing.T) {
 				spec: tool.Spec{
 					Name:        "blocking_tool",
 					Description: "Blocks until its context ends",
+					Authority:   tool.AuthorityRead,
 				},
 			}
 
@@ -550,7 +557,7 @@ func TestEngineExecute(t *testing.T) {
 				Client:       client,
 				Events:       events,
 				Tools:        registry,
-				ToolPolicy:   policy.NewAllowlist("blocking_tool"),
+				ToolPolicy:   policy.NewAllowlist(tool.AuthorityRead),
 				MaxSteps:     1,
 				ModelTimeout: time.Second,
 				ToolTimeout:  time.Second,
@@ -626,6 +633,7 @@ func TestEngineExecuteHydratesBoundedContext(t *testing.T) {
 		spec: tool.Spec{
 			Name:        "lookup",
 			Description: "Looks up synthetic support data",
+			Authority:   tool.AuthorityRead,
 		},
 		output: tool.Output{Content: `{"result":"fresh"}`},
 	}
@@ -654,7 +662,7 @@ func TestEngineExecuteHydratesBoundedContext(t *testing.T) {
 		Client:             client,
 		Events:             event.NewLog(),
 		Tools:              registry,
-		ToolPolicy:         policy.NewAllowlist("lookup"),
+		ToolPolicy:         policy.NewAllowlist(tool.AuthorityRead),
 		MaxSteps:           3,
 		ModelTimeout:       time.Second,
 		ToolTimeout:        time.Second,
@@ -680,11 +688,12 @@ func TestEngineExecuteHydratesBoundedContext(t *testing.T) {
 	}
 }
 
-func TestEngineExecuteDeniesToolWithoutPolicyApproval(t *testing.T) {
+func TestEngineExecuteDeniesEffectAuthority(t *testing.T) {
 	executable := &countingTool{
 		spec: tool.Spec{
 			Name:        "issue_credit",
 			Description: "Issues a synthetic support credit",
+			Authority:   tool.AuthorityEffect,
 		},
 		output: tool.Output{Content: `{"credit":"issued"}`},
 	}
@@ -704,13 +713,18 @@ func TestEngineExecuteDeniesToolWithoutPolicyApproval(t *testing.T) {
 		Client:       client,
 		Events:       events,
 		Tools:        registry,
+		ToolPolicy:   policy.NewAllowlist(tool.AuthorityRead),
 		MaxSteps:     2,
 		ModelTimeout: time.Second,
 		ToolTimeout:  time.Second,
 	}
 
 	response, err := engine.Execute(context.Background(), &r, model.Request{
-		Tools: []tool.Spec{executable.Spec()},
+		Tools: []tool.Spec{{
+			Name:        call.Name,
+			Description: "Looks up a customer",
+			Authority:   tool.AuthorityRead,
+		}},
 	})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -754,6 +768,7 @@ func TestEngineExecuteCompactsHistoryIntoSummary(t *testing.T) {
 		spec: tool.Spec{
 			Name:        "lookup",
 			Description: "Looks up synthetic support data",
+			Authority:   tool.AuthorityRead,
 		},
 		output: tool.Output{Content: `{"result":"fresh"}`},
 	}
@@ -794,7 +809,7 @@ func TestEngineExecuteCompactsHistoryIntoSummary(t *testing.T) {
 		Client:             client,
 		Events:             events,
 		Tools:              registry,
-		ToolPolicy:         policy.NewAllowlist("lookup"),
+		ToolPolicy:         policy.NewAllowlist(tool.AuthorityRead),
 		MaxSteps:           2,
 		ModelTimeout:       time.Second,
 		ToolTimeout:        time.Second,
@@ -862,6 +877,7 @@ func TestEngineExecuteReturnsCheckpointedToolOutput(t *testing.T) {
 		spec: tool.Spec{
 			Name:        "lookup_customer",
 			Description: "Looks up a customer",
+			Authority:   tool.AuthorityRead,
 		},
 		output: tool.Output{Content: `{"customer":"fresh"}`},
 	}
@@ -894,7 +910,7 @@ func TestEngineExecuteReturnsCheckpointedToolOutput(t *testing.T) {
 		Client:       client,
 		Events:       event.NewLog(),
 		Tools:        registry,
-		ToolPolicy:   policy.NewAllowlist("lookup_customer"),
+		ToolPolicy:   policy.NewAllowlist(tool.AuthorityRead),
 		MaxSteps:     2,
 		ModelTimeout: time.Second,
 		ToolTimeout:  time.Second,
@@ -968,7 +984,7 @@ func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {
 			Client:       client,
 			Events:       event.NewLog(),
 			Tools:        registry,
-			ToolPolicy:   policy.NewAllowlist("lookup_customer", "lookup_incident"),
+			ToolPolicy:   policy.NewAllowlist(tool.AuthorityRead),
 			MaxSteps:     3,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,

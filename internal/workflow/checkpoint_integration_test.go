@@ -127,6 +127,7 @@ func TestEngineExecuteReadsCheckpointedToolOutputAfterPoolRestart(t *testing.T) 
 		spec: tool.Spec{
 			Name:        call.Name,
 			Description: "Looks up a customer",
+			Authority:   tool.AuthorityRead,
 		},
 		output: tool.Output{Content: `{"customer":"Ada Lovelace"}`},
 	}
@@ -161,7 +162,7 @@ func TestEngineExecuteReadsCheckpointedToolOutputAfterPoolRestart(t *testing.T) 
 		runner := workflow.StepRunner{Store: postgres.NewStore(pool)}
 		engine := newCheckpointedEngine(firstClient, &runner)
 		engine.Tools = firstRegistry
-		engine.ToolPolicy = policy.NewAllowlist(call.Name)
+		engine.ToolPolicy = policy.NewAllowlist(tool.AuthorityRead)
 		engine.MaxSteps = 2
 		response, err := engine.Execute(ctx, &r, request)
 		if err != nil {
@@ -188,7 +189,7 @@ func TestEngineExecuteReadsCheckpointedToolOutputAfterPoolRestart(t *testing.T) 
 	runner := workflow.StepRunner{Store: postgres.NewStore(pool), Recover: true}
 	engine := newCheckpointedEngine(recoveredClient, &runner)
 	engine.Tools = recoveredRegistry
-	engine.ToolPolicy = policy.NewAllowlist(call.Name)
+	engine.ToolPolicy = policy.NewAllowlist(tool.AuthorityRead)
 	engine.MaxSteps = 2
 	response, err := engine.Execute(ctx, &recoveredRun, request)
 	if err != nil {
@@ -217,7 +218,7 @@ func TestEngineExecuteRetriesInterruptedIssueCreditAsOneLogicalEffect(t *testing
 	}
 	request := model.Request{
 		Messages: []model.Message{{Role: model.RoleUser, Content: "Issue a $5 support credit."}},
-		Tools:    []tool.Spec{{Name: call.Name, Description: "Issues a synthetic support credit"}},
+		Tools:    []tool.Spec{{Name: call.Name, Description: "Issues a synthetic support credit", Authority: tool.AuthorityEffect}},
 	}
 
 	func() {
@@ -245,7 +246,7 @@ func TestEngineExecuteRetriesInterruptedIssueCreditAsOneLogicalEffect(t *testing
 		runner := workflow.StepRunner{Store: &failFirstCompleteStore{Store: store, failStepKey: run.StepKey("tool/1/call_credit")}}
 		engine := newCheckpointedEngine(model.NewScriptedClient(model.Response{ToolCalls: []tool.Call{call}}), &runner)
 		engine.Tools = registry
-		engine.ToolPolicy = policy.NewAllowlist(call.Name)
+		engine.ToolPolicy = policy.NewAllowlist(tool.AuthorityEffect)
 		engine.MaxSteps = 2
 		if _, err := engine.Execute(ctx, &r, request); !errors.Is(err, errInterruptedBeforeToolCheckpoint) {
 			t.Fatalf("first Execute() error = %v, want %v", err, errInterruptedBeforeToolCheckpoint)
@@ -273,7 +274,7 @@ func TestEngineExecuteRetriesInterruptedIssueCreditAsOneLogicalEffect(t *testing
 	runner := workflow.StepRunner{Store: store, Recover: true}
 	engine := newCheckpointedEngine(recoveredClient, &runner)
 	engine.Tools = registry
-	engine.ToolPolicy = policy.NewAllowlist(call.Name)
+	engine.ToolPolicy = policy.NewAllowlist(tool.AuthorityEffect)
 	engine.MaxSteps = 2
 
 	recoveredRun := run.New(r.ID)
