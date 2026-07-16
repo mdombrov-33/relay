@@ -73,8 +73,13 @@ oldest prefix and retained newest suffix at a lower watermark. It never splits a
 message and always keeps the latest message verbatim, even if that one message
 is larger than the lower watermark.
 
-Next: introduce the summary state and checkpointed summarization boundary that
-turns the planner's evicted history into model context.
+`workflow.SummaryStep` now turns an evicted prefix plus prior summary state into
+an updated text summary through the normal model port and `StepRunner`. It uses
+a no-tools summary request, rejects empty or tool-calling responses, and reuses
+a completed summary checkpoint instead of calling the model again.
+
+Next: wire compaction planning and `SummaryStep` through the engine so later
+model turns receive summary state before retained verbatim history.
 
 ## Repository map
 
