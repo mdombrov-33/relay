@@ -24,7 +24,7 @@ event timeline.
 ## Current phase
 
 Milestone 3 is complete. Milestone 4, checkpointed steps and crash recovery,
-is next.
+is active.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
@@ -34,7 +34,12 @@ lifecycle event, and reads bounded ordered event pages by run or global cursor.
 `make test-integration` connects to the migrated local database and proves
 committed run/event history survives reopening a pool.
 
-Next: begin M4 with a durable step-checkpoint projection keyed by run and step.
+The `steps` migration provides a durable, unique checkpoint projection keyed by
+run and step. A row carries a fixed SHA-256 input hash, positive attempt,
+running/completed state, and a completed JSON result.
+
+Next: add Store operations that claim a named step, return a completed
+checkpoint, and complete an in-flight step atomically.
 
 ## Repository map
 

@@ -130,8 +130,6 @@ func newEnvelope(id string, runID run.ID, stepKey run.StepKey, typ Type, occurre
 	}
 }
 
-// NewStored reconstructs an event read from durable storage. Stored payloads
-// only need valid JSON so readers can display unknown historical event shapes.
 func NewStored(sequence int64, id string, runID run.ID, stepKey run.StepKey, typ Type, occurredAt time.Time, payload json.RawMessage) (Stored, error) {
 	if sequence < 1 {
 		return Stored{}, ErrInvalidStoredSequence

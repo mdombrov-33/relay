@@ -273,6 +273,128 @@ func TestStoreListEventsAfter(t *testing.T) {
 	}
 }
 
+func TestStepsProjectionInvariants(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	r := pendingIntegrationRun(t, pool, ctx, "step")
+	startedAt := time.Now().UTC()
+	inputHash := make([]byte, 32)
+	for index := range inputHash {
+		inputHash[index] = byte(index)
+	}
+
+	if _, err := pool.Exec(
+		ctx,
+		`INSERT INTO steps (run_id, step_key, input_hash, attempt, status, started_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		r.ID,
+		run.StepKey("model/1"),
+		inputHash,
+		1,
+		"running",
+		startedAt,
+	); err != nil {
+		t.Fatalf("insert running step: %v", err)
+	}
+
+	completedAt := startedAt.Add(time.Second)
+	if _, err := pool.Exec(
+		ctx,
+		`UPDATE steps
+		 SET status = $3, result = $4::jsonb, completed_at = $5
+		 WHERE run_id = $1 AND step_key = $2`,
+		r.ID,
+		run.StepKey("model/1"),
+		"completed",
+		`{"response":"cached"}`,
+		completedAt,
+	); err != nil {
+		t.Fatalf("complete step: %v", err)
+	}
+
+	var (
+		gotHash        []byte
+		gotAttempt     int
+		gotStatus      string
+		gotResult      string
+		gotCompletedAt time.Time
+	)
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT input_hash, attempt, status, result::text, completed_at
+		 FROM steps
+		 WHERE run_id = $1 AND step_key = $2`,
+		r.ID,
+		run.StepKey("model/1"),
+	).Scan(&gotHash, &gotAttempt, &gotStatus, &gotResult, &gotCompletedAt); err != nil {
+		t.Fatalf("read completed step: %v", err)
+	}
+	if string(gotHash) != string(inputHash) || gotAttempt != 1 || gotStatus != "completed" || gotResult != `{"response": "cached"}` || !gotCompletedAt.Equal(completedAt) {
+		t.Errorf("completed step = (hash %v, attempt %d, status %q, result %s, completed_at %s), want stored checkpoint", gotHash, gotAttempt, gotStatus, gotResult, gotCompletedAt)
+	}
+
+	tests := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{
+			name: "duplicate run and step key",
+			query: `INSERT INTO steps (run_id, step_key, input_hash, attempt, status, started_at)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+			args: []any{r.ID, run.StepKey("model/1"), inputHash, 2, "running", startedAt},
+		},
+		{
+			name: "empty step key",
+			query: `INSERT INTO steps (run_id, step_key, input_hash, attempt, status, started_at)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+			args: []any{r.ID, run.StepKey(""), inputHash, 1, "running", startedAt},
+		},
+		{
+			name: "non SHA-256 input hash",
+			query: `INSERT INTO steps (run_id, step_key, input_hash, attempt, status, started_at)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+			args: []any{r.ID, run.StepKey("model/2"), make([]byte, 31), 1, "running", startedAt},
+		},
+		{
+			name: "nonpositive attempt",
+			query: `INSERT INTO steps (run_id, step_key, input_hash, attempt, status, started_at)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+			args: []any{r.ID, run.StepKey("model/attempt"), inputHash, 0, "running", startedAt},
+		},
+		{
+			name: "completed step without result",
+			query: `INSERT INTO steps (run_id, step_key, input_hash, attempt, status, started_at, completed_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			args: []any{r.ID, run.StepKey("model/3"), inputHash, 1, "completed", startedAt, completedAt},
+		},
+		{
+			name: "completed step without completion time",
+			query: `INSERT INTO steps (run_id, step_key, input_hash, attempt, status, result, started_at)
+				VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+			args: []any{r.ID, run.StepKey("model/4"), inputHash, 1, "completed", `{"response":"cached"}`, startedAt},
+		},
+		{
+			name: "completion before start",
+			query: `INSERT INTO steps (run_id, step_key, input_hash, attempt, status, result, started_at, completed_at)
+				VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
+			args: []any{r.ID, run.StepKey("model/5"), inputHash, 1, "completed", `{"response":"cached"}`, completedAt, startedAt},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, test.query, test.args...); err == nil {
+				t.Fatal("Exec() error = nil, want schema constraint violation")
+			}
+		})
+	}
+}
+
 func openIntegrationPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 

@@ -23,20 +23,14 @@ var (
 
 const eventPageSize = 100
 
-// Store persists Relay run projections and their event history in PostgreSQL.
 type Store struct {
 	pool *pgxpool.Pool
 }
 
-// NewStore creates a Store backed by pool. The caller retains ownership of the
-// pool and must close it during process shutdown.
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// CreateRun records a pending run and its workflow.queued.v1 event in one
-// transaction. A caller must provide an event for the same run so the durable
-// projection and event history cannot disagree after this operation succeeds.
 func (s *Store) CreateRun(ctx context.Context, r run.Run, queued event.Envelope) error {
 	if r.Status != run.StatusPending {
 		return ErrRunNotPending
@@ -88,10 +82,6 @@ func (s *Store) CreateRun(ctx context.Context, r run.Run, queued event.Envelope)
 	return nil
 }
 
-// TransitionToTerminal updates a running run and records its corresponding
-// terminal lifecycle event in one transaction. The status predicate in the
-// update prevents duplicate terminal events when more than one caller tries to
-// complete the same run.
 func (s *Store) TransitionToTerminal(ctx context.Context, r run.Run, terminal event.Envelope) error {
 	expectedType, err := terminalEventType(r.Status)
 	if err != nil {
@@ -150,9 +140,6 @@ func (s *Store) TransitionToTerminal(ctx context.Context, r run.Run, terminal ev
 	return nil
 }
 
-// ListRunEvents returns at most one ordered page of events for runID. The
-// cursor is exclusive, so callers can continue from the last sequence they
-// successfully observed.
 func (s *Store) ListRunEvents(ctx context.Context, runID run.ID, afterSequence int64) ([]event.Stored, error) {
 	if afterSequence < 0 {
 		return nil, ErrNegativeEventCursor
@@ -171,8 +158,7 @@ func (s *Store) ListRunEvents(ctx context.Context, runID run.ID, afterSequence i
 	)
 }
 
-// ListEventsAfter returns at most one globally ordered page of events after an
-// exclusive sequence cursor. It is the basis for reconnectable event streams.
+// exclusive sequence ursor. It is the basis for reconnectable event streams.
 func (s *Store) ListEventsAfter(ctx context.Context, afterSequence int64) ([]event.Stored, error) {
 	if afterSequence < 0 {
 		return nil, ErrNegativeEventCursor

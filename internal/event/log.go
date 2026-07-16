@@ -15,13 +15,10 @@ type Log struct {
 	events []Envelope
 }
 
-// Clock supplies the occurrence time for newly recorded events.
 type Clock func() time.Time
 
-// IDGenerator supplies the ID for newly recorded events.
 type IDGenerator func() string
 
-// NewLog creates an in-memory event log for normal runtime use.
 func NewLog() *Log {
 	var nextID uint64
 
@@ -34,9 +31,6 @@ func NewLog() *Log {
 	)
 }
 
-// NewLogWith creates an in-memory event log with caller-supplied event
-// identity and time sources. Tests and retry simulations can use it to make
-// the recorded envelopes deterministic.
 func NewLogWith(clock Clock, newID IDGenerator) *Log {
 	return &Log{
 		clock: clock,

@@ -8,9 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Open creates a PostgreSQL connection pool and verifies that it can reach the
-// database before returning it. The caller owns the returned pool and must
-// close it during process shutdown.
 func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
