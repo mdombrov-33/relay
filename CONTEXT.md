@@ -23,8 +23,8 @@ event timeline.
 
 ## Current phase
 
-Milestones 3 through 5 are complete. Milestone 6, bounded context and
-compaction, is active.
+Milestones 3 through 6 are complete. Milestone 7, tool policy and
+least-privilege handoff, is active.
 
 The repository already has a bounded in-memory model/tool loop, typed redacted
 events, CLI timelines, a `runs`/append-only-`events` Goose migration, PostgreSQL
@@ -79,8 +79,8 @@ Before a later model turn it summarizes an evicted prefix through a stable
 original pins plus the summary plus that suffix. It records a safe-count-only
 `memory.compacted.v1` event; summary text and history never enter the event.
 
-Next: begin M7 by adding a policy boundary that permits or denies registered
-tool calls before execution.
+Next: enrich registered tool metadata so policy evaluates declared authority,
+not only a model-proposed tool name.
 
 ## Repository map
 

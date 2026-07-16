@@ -11,6 +11,7 @@ import (
 
 	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/model"
+	"github.com/mdombrov-33/relay/internal/policy"
 	"github.com/mdombrov-33/relay/internal/postgres"
 	"github.com/mdombrov-33/relay/internal/run"
 	"github.com/mdombrov-33/relay/internal/tool"
@@ -226,6 +227,7 @@ func TestEngineExecute(t *testing.T) {
 			Client:       client,
 			Events:       events,
 			Tools:        registry,
+			ToolPolicy:   policy.NewAllowlist("lookup_customer"),
 			MaxSteps:     2,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -340,6 +342,7 @@ func TestEngineExecute(t *testing.T) {
 			Client:       client,
 			Events:       event.NewLog(),
 			Tools:        registry,
+			ToolPolicy:   policy.NewAllowlist("lookup_customer"),
 			MaxSteps:     1,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -405,6 +408,7 @@ func TestEngineExecute(t *testing.T) {
 			Client:       client,
 			Events:       events,
 			Tools:        registry,
+			ToolPolicy:   policy.NewAllowlist("lookup_customer", "lookup_incident"),
 			MaxSteps:     3,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,
@@ -546,6 +550,7 @@ func TestEngineExecute(t *testing.T) {
 				Client:       client,
 				Events:       events,
 				Tools:        registry,
+				ToolPolicy:   policy.NewAllowlist("blocking_tool"),
 				MaxSteps:     1,
 				ModelTimeout: time.Second,
 				ToolTimeout:  time.Second,
@@ -649,6 +654,7 @@ func TestEngineExecuteHydratesBoundedContext(t *testing.T) {
 		Client:             client,
 		Events:             event.NewLog(),
 		Tools:              registry,
+		ToolPolicy:         policy.NewAllowlist("lookup"),
 		MaxSteps:           3,
 		ModelTimeout:       time.Second,
 		ToolTimeout:        time.Second,
@@ -671,6 +677,75 @@ func TestEngineExecuteHydratesBoundedContext(t *testing.T) {
 	want := append(append([]model.Message(nil), request.Messages...), latestHistory...)
 	if !messagesEqual(requests[2].Messages, want) {
 		t.Fatalf("third request messages = %#v, want %#v", requests[2].Messages, want)
+	}
+}
+
+func TestEngineExecuteDeniesToolWithoutPolicyApproval(t *testing.T) {
+	executable := &countingTool{
+		spec: tool.Spec{
+			Name:        "issue_credit",
+			Description: "Issues a synthetic support credit",
+		},
+		output: tool.Output{Content: `{"credit":"issued"}`},
+	}
+	registry, err := tool.NewRegistry(executable)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	call := tool.Call{ID: "call_credit", Name: "issue_credit", Arguments: json.RawMessage(`{"amount_cents":500}`)}
+	client := model.NewScriptedClient(
+		model.Response{ToolCalls: []tool.Call{call}},
+		model.Response{Text: "A support credit cannot be issued."},
+	)
+	events := event.NewLog()
+	r := run.New("run-123")
+	engine := Engine{
+		Client:       client,
+		Events:       events,
+		Tools:        registry,
+		MaxSteps:     2,
+		ModelTimeout: time.Second,
+		ToolTimeout:  time.Second,
+	}
+
+	response, err := engine.Execute(context.Background(), &r, model.Request{
+		Tools: []tool.Spec{executable.Spec()},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if response.Text != "A support credit cannot be issued." {
+		t.Errorf("response text = %q, want final response", response.Text)
+	}
+	if executable.calls != 0 {
+		t.Errorf("tool calls = %d, want 0", executable.calls)
+	}
+
+	requests := client.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(requests))
+	}
+	if got := requests[1].Messages[1]; got.Role != model.RoleTool || got.Content != deniedToolResult {
+		t.Errorf("denied tool message = %#v, want policy denial", got)
+	}
+
+	assertEventTypes(t, events.Events(),
+		event.TypeWorkflowStarted,
+		event.TypeModelRequested,
+		event.TypeModelCompleted,
+		event.TypeToolDenied,
+		event.TypeModelRequested,
+		event.TypeModelCompleted,
+		event.TypeWorkflowCompleted,
+	)
+
+	var payload event.ToolPayload
+	if err := json.Unmarshal(events.Events()[3].Payload(), &payload); err != nil {
+		t.Fatalf("decode denied payload: %v", err)
+	}
+	if payload != (event.ToolPayload{CallID: call.ID, ToolName: call.Name}) {
+		t.Errorf("denied payload = %#v, want call identity", payload)
 	}
 }
 
@@ -719,6 +794,7 @@ func TestEngineExecuteCompactsHistoryIntoSummary(t *testing.T) {
 		Client:             client,
 		Events:             events,
 		Tools:              registry,
+		ToolPolicy:         policy.NewAllowlist("lookup"),
 		MaxSteps:           2,
 		ModelTimeout:       time.Second,
 		ToolTimeout:        time.Second,
@@ -818,6 +894,7 @@ func TestEngineExecuteReturnsCheckpointedToolOutput(t *testing.T) {
 		Client:       client,
 		Events:       event.NewLog(),
 		Tools:        registry,
+		ToolPolicy:   policy.NewAllowlist("lookup_customer"),
 		MaxSteps:     2,
 		ModelTimeout: time.Second,
 		ToolTimeout:  time.Second,
@@ -891,6 +968,7 @@ func TestEngineExecuteLosesProgressAfterRestart(t *testing.T) {
 			Client:       client,
 			Events:       event.NewLog(),
 			Tools:        registry,
+			ToolPolicy:   policy.NewAllowlist("lookup_customer", "lookup_incident"),
 			MaxSteps:     3,
 			ModelTimeout: time.Second,
 			ToolTimeout:  time.Second,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/model"
+	"github.com/mdombrov-33/relay/internal/policy"
 	"github.com/mdombrov-33/relay/internal/run"
 	"github.com/mdombrov-33/relay/internal/tool"
 	"github.com/mdombrov-33/relay/internal/workflow"
@@ -75,6 +76,7 @@ func runSuccessfulDemo() {
 		Client:             client,
 		Events:             events,
 		Tools:              tools,
+		ToolPolicy:         policy.NewAllowlist("lookup_customer", "lookup_incident"),
 		MaxSteps:           3,
 		ModelTimeout:       time.Second,
 		ToolTimeout:        time.Second,

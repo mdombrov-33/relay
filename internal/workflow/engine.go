@@ -9,6 +9,7 @@ import (
 
 	"github.com/mdombrov-33/relay/internal/event"
 	"github.com/mdombrov-33/relay/internal/model"
+	"github.com/mdombrov-33/relay/internal/policy"
 	"github.com/mdombrov-33/relay/internal/run"
 	"github.com/mdombrov-33/relay/internal/tool"
 )
@@ -26,12 +27,18 @@ var (
 const (
 	workflowStepKey           run.StepKey = "workflow"
 	DefaultContextBudgetBytes             = 16 * 1024
+	deniedToolResult                      = "tool call denied by policy"
 )
+
+type ToolPolicy interface {
+	Decide(tool.Call) policy.Decision
+}
 
 type Engine struct {
 	Client             model.Client
 	Events             *event.Log
 	Tools              *tool.Registry
+	ToolPolicy         ToolPolicy
 	MaxSteps           int
 	ModelTimeout       time.Duration
 	ToolTimeout        time.Duration
@@ -206,20 +213,31 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 			return response, nil
 		}
 
-		if e.Tools == nil {
-			if err := r.Fail(); err != nil {
-				return model.Response{}, fmt.Errorf("fail run without tools: %w", err)
-			}
-			if err := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); err != nil {
-				return model.Response{}, err
-			}
-
-			return model.Response{}, fmt.Errorf("lookup tool: %w", ErrToolsNotConfigured)
-		}
-
 		for _, call := range response.ToolCalls {
 			toolStepKey := run.StepKey(fmt.Sprintf("tool/%d/%s", step+1, call.ID))
 			payload := event.ToolPayload{CallID: call.ID, ToolName: call.Name}
+			if e.toolDecision(call) != policy.DecisionAllow {
+				if err := e.record(r, toolStepKey, event.TypeToolDenied, payload); err != nil {
+					return model.Response{}, err
+				}
+				history = append(history, model.NewToolMessage(tool.Result{
+					CallID:   call.ID,
+					ToolName: call.Name,
+					Content:  deniedToolResult,
+				}))
+
+				continue
+			}
+			if e.Tools == nil {
+				if err := r.Fail(); err != nil {
+					return model.Response{}, fmt.Errorf("fail run without tools: %w", err)
+				}
+				if err := e.record(r, workflowStepKey, event.TypeWorkflowFailed, event.LifecyclePayload{Status: r.Status}); err != nil {
+					return model.Response{}, err
+				}
+
+				return model.Response{}, fmt.Errorf("lookup tool: %w", ErrToolsNotConfigured)
+			}
 			if err := e.record(r, toolStepKey, event.TypeToolRequested, payload); err != nil {
 				return model.Response{}, err
 			}
@@ -284,6 +302,14 @@ func (e Engine) Execute(ctx context.Context, r *run.Run, request model.Request) 
 	}
 
 	return model.Response{}, fmt.Errorf("execute workflow: %w", ErrStepLimitExceeded)
+}
+
+func (e Engine) toolDecision(call tool.Call) policy.Decision {
+	if e.ToolPolicy == nil {
+		return policy.DecisionDeny
+	}
+
+	return e.ToolPolicy.Decide(call)
 }
 
 func pinnedWithSummary(pinned []model.Message, summary SummaryState) []model.Message {
