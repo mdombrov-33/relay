@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getRun, listAllRunEvents } from "./api";
+import { cancelRun, getRun, listAllRunEvents, resolveApproval } from "./api";
 import StatusChip from "./StatusChip";
 import Timeline from "./Timeline";
 import type { RunSummary, StoredEvent } from "./types";
@@ -8,6 +8,8 @@ interface Props {
   runId: string;
   lastEvent: StoredEvent | null;
 }
+
+const terminalStatuses = new Set(["succeeded", "failed", "canceled"]);
 
 function mergeEvents(base: StoredEvent[], extra: StoredEvent[]): StoredEvent[] {
   const bySequence = new Map<number, StoredEvent>();
@@ -21,13 +23,29 @@ export default function RunDetail({ runId, lastEvent }: Props) {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [events, setEvents] = useState<StoredEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [commandError, setCommandError] = useState<string | null>(null);
   const cursor = useRef(0);
+
+  const sendCommand = async (command: () => Promise<unknown>) => {
+    setBusy(true);
+    setCommandError(null);
+    try {
+      await command();
+      setRun(await getRun(runId));
+    } catch (err) {
+      setCommandError(err instanceof Error ? err.message : "command failed");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     let stale = false;
     setRun(null);
     setEvents([]);
     setError(null);
+    setCommandError(null);
     cursor.current = 0;
 
     void (async () => {
@@ -88,8 +106,22 @@ export default function RunDetail({ runId, lastEvent }: Props) {
             {new Date(run.updatedAt).toLocaleString()}
           </p>
         </div>
-        <StatusChip status={run.status} />
+        <div className="run-detail-actions">
+          <StatusChip status={run.status} />
+          {!terminalStatuses.has(run.status) && (
+            <button
+              type="button"
+              className="button"
+              disabled={busy}
+              onClick={() => void sendCommand(() => cancelRun(runId))}
+            >
+              Cancel run
+            </button>
+          )}
+        </div>
       </header>
+
+      {commandError && <div className="banner">{commandError}</div>}
 
       {run.pendingApproval && (
         <section className="approval-panel">
@@ -100,6 +132,32 @@ export default function RunDetail({ runId, lastEvent }: Props) {
             decision, requested{" "}
             {new Date(run.pendingApproval.requestedAt).toLocaleString()}.
           </p>
+          <div className="approval-actions">
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={busy}
+              onClick={() =>
+                void sendCommand(() =>
+                  resolveApproval(runId, run.pendingApproval!.id, "approved"),
+                )
+              }
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              className="button button-danger"
+              disabled={busy}
+              onClick={() =>
+                void sendCommand(() =>
+                  resolveApproval(runId, run.pendingApproval!.id, "rejected"),
+                )
+              }
+            >
+              Reject
+            </button>
+          </div>
         </section>
       )}
 

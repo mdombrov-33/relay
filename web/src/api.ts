@@ -39,6 +39,26 @@ export function createRun(): Promise<{ id: string; status: RunStatus }> {
   return request("/v1/runs", { method: "POST" });
 }
 
+export type ApprovalDecision = "approved" | "rejected";
+
+export function resolveApproval(
+  runId: string,
+  requestId: string,
+  decision: ApprovalDecision,
+): Promise<{ requestId: string; decision: ApprovalDecision }> {
+  return request(`/v1/runs/${encodeURIComponent(runId)}/signals/approval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requestId, decision }),
+  });
+}
+
+export function cancelRun(id: string): Promise<{ id: string; status: RunStatus }> {
+  return request(`/v1/runs/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+  });
+}
+
 /** Pages through the bounded run-events endpoint until the durable log is drained. */
 export async function listAllRunEvents(
   id: string,

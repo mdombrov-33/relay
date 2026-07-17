@@ -282,6 +282,23 @@ h2 {
   margin: 0;
 }
 
+.approval-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.run-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: none;
+}
+
+.button-danger {
+  color: var(--red);
+  border-color: var(--red);
+}
+
 /* Timeline */
 
 .timeline {
