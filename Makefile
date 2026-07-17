@@ -6,10 +6,13 @@ DB_SERVICE ?= db
 MIGRATIONS_DIR := migrations
 DATABASE_URL ?= postgres://relay:relay@localhost:5434/relay?sslmode=disable
 
-.PHONY: api check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate relayctl test test-integration test-race
+.PHONY: api check db-down db-logs db-reset db-shell db-up fmt lint migrate-down migrate-status migrate-up migrate-validate relayctl test test-integration test-race web
 
 api:
 	DATABASE_URL="$(DATABASE_URL)" $(GO) run ./cmd/api $(ARGS)
+
+web:
+	cd web && npm install && npm run dev
 
 check: test test-race lint
 

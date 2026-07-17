@@ -185,6 +185,48 @@ func TestStoreFindRun(t *testing.T) {
 	}
 }
 
+func TestStoreListRuns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool := openIntegrationPool(t, ctx)
+	defer pool.Close()
+
+	store := NewStore(pool)
+	older := pendingIntegrationRun(t, pool, ctx, "list-older")
+	newer, request := waitingApprovalIntegrationRun(t, pool, ctx, "list-newer")
+
+	records, err := store.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns() error = %v", err)
+	}
+
+	olderIndex, newerIndex := -1, -1
+	for i, record := range records {
+		switch record.Run.ID {
+		case older.ID:
+			olderIndex = i
+			if record.Run.Status != run.StatusPending || record.PendingApproval != nil {
+				t.Errorf("ListRuns() older = %#v, want pending run without approval", record)
+			}
+		case newer.ID:
+			newerIndex = i
+			if record.Run.Status != run.StatusWaiting {
+				t.Errorf("ListRuns() newer status = %q, want %q", record.Run.Status, run.StatusWaiting)
+			}
+			if record.PendingApproval == nil || record.PendingApproval.ID != request.ID {
+				t.Errorf("ListRuns() newer approval = %#v, want request %q", record.PendingApproval, request.ID)
+			}
+		}
+	}
+	if olderIndex < 0 || newerIndex < 0 {
+		t.Fatalf("ListRuns() indices = (%d, %d), want both created runs listed", olderIndex, newerIndex)
+	}
+	if newerIndex > olderIndex {
+		t.Errorf("ListRuns() order = newer at %d after older at %d, want newest first", newerIndex, olderIndex)
+	}
+}
+
 func TestStoreTransitionToTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

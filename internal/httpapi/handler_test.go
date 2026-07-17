@@ -63,6 +63,81 @@ func TestGetRun(t *testing.T) {
 	}
 }
 
+func TestListRuns(t *testing.T) {
+	createdAt := time.Date(2026, time.July, 17, 10, 0, 0, 0, time.UTC)
+	waiting := postgres.RunRecord{
+		Run:       run.Run{ID: run.ID("run-2"), Status: run.StatusWaiting},
+		CreatedAt: createdAt.Add(time.Minute),
+		UpdatedAt: createdAt.Add(2 * time.Minute),
+		PendingApproval: &postgres.ApprovalRequestRecord{
+			ApprovalRequest: postgres.ApprovalRequest{
+				ID:       "approval-2",
+				RunID:    run.ID("run-2"),
+				StepKey:  run.StepKey("tool/1/issue-credit"),
+				CallID:   "call-2",
+				ToolName: "issue_credit",
+			},
+			Status:      postgres.ApprovalStatusPending,
+			RequestedAt: createdAt.Add(90 * time.Second),
+		},
+	}
+	pending := postgres.RunRecord{
+		Run:       run.Run{ID: run.ID("run-1"), Status: run.StatusPending},
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	}
+	store := &fakeRunReader{records: []postgres.RunRecord{waiting, pending}}
+
+	response := serveRequest(NewHandler(store), http.MethodGet, "/v1/runs")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body runsResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2", len(body.Runs))
+	}
+	if body.Runs[0].ID != waiting.Run.ID || body.Runs[0].Status != run.StatusWaiting {
+		t.Errorf("runs[0] = %#v, want waiting run-2 first", body.Runs[0])
+	}
+	if body.Runs[0].PendingApproval == nil || body.Runs[0].PendingApproval.ID != "approval-2" {
+		t.Errorf("runs[0].pendingApproval = %#v, want approval-2", body.Runs[0].PendingApproval)
+	}
+	if body.Runs[1].ID != pending.Run.ID || body.Runs[1].PendingApproval != nil {
+		t.Errorf("runs[1] = %#v, want pending run-1 without approval", body.Runs[1])
+	}
+	if store.listRunsCalls != 1 {
+		t.Errorf("ListRuns() calls = %d, want 1", store.listRunsCalls)
+	}
+}
+
+func TestListRunsReturnsEmptyList(t *testing.T) {
+	response := serveRequest(NewHandler(&fakeRunReader{}), http.MethodGet, "/v1/runs")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if strings.TrimSpace(response.Body.String()) != `{"runs":[]}` {
+		t.Errorf("body = %q, want empty runs list", strings.TrimSpace(response.Body.String()))
+	}
+}
+
+func TestListRunsMapsStoreErrors(t *testing.T) {
+	store := &fakeRunReader{listRunsErr: errors.New("password=secret")}
+
+	response := serveRequest(NewHandler(store), http.MethodGet, "/v1/runs")
+
+	if response.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+	if strings.TrimSpace(response.Body.String()) != `{"error":"internal server error"}` {
+		t.Errorf("body = %q, want generic error", strings.TrimSpace(response.Body.String()))
+	}
+}
+
 func TestCreateRun(t *testing.T) {
 	now := time.Date(2026, time.July, 17, 15, 0, 0, 0, time.UTC)
 	store := &fakeRunReader{}
@@ -648,6 +723,9 @@ func TestCancelRunMapsStoreErrors(t *testing.T) {
 
 type fakeRunReader struct {
 	record               postgres.RunRecord
+	records              []postgres.RunRecord
+	listRunsErr          error
+	listRunsCalls        int
 	events               []event.Stored
 	approval             postgres.ApprovalRequestRecord
 	err                  error
@@ -692,6 +770,11 @@ func (f *fakeRunReader) CreateRun(_ context.Context, r run.Run, queued event.Env
 	f.createdRun = r
 	f.queued = queued
 	return f.createErr
+}
+
+func (f *fakeRunReader) ListRuns(_ context.Context) ([]postgres.RunRecord, error) {
+	f.listRunsCalls++
+	return f.records, f.listRunsErr
 }
 
 func (f *fakeRunReader) FindRun(_ context.Context, runID run.ID) (postgres.RunRecord, error) {

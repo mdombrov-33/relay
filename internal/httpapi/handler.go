@@ -28,6 +28,7 @@ type store interface {
 	FindApprovalRequest(ctx context.Context, requestID string) (postgres.ApprovalRequestRecord, error)
 	ListEventsAfter(ctx context.Context, afterSequence int64) ([]event.Stored, error)
 	ListRunEvents(ctx context.Context, runID run.ID, afterSequence int64) ([]event.Stored, error)
+	ListRuns(ctx context.Context) ([]postgres.RunRecord, error)
 	ResolveApproval(ctx context.Context, signal postgres.ApprovalSignal, resolved event.Envelope) (bool, error)
 }
 
@@ -53,6 +54,10 @@ type approvalResponse struct {
 	CallID      string      `json:"callId"`
 	ToolName    string      `json:"toolName"`
 	RequestedAt time.Time   `json:"requestedAt"`
+}
+
+type runsResponse struct {
+	Runs []runResponse `json:"runs"`
 }
 
 type errorResponse struct {
@@ -105,6 +110,7 @@ func newHandler(store store, now func() time.Time, newID func(string) (string, e
 func newHandlerWithWait(store store, now func() time.Time, newID func(string) (string, error), wait func(context.Context) error) http.Handler {
 	h := &Handler{store: store, mux: http.NewServeMux(), now: now, newID: newID, wait: wait}
 	h.mux.HandleFunc("POST /v1/runs", h.createRun)
+	h.mux.HandleFunc("GET /v1/runs", h.listRuns)
 	h.mux.HandleFunc("GET /v1/events/stream", h.streamEvents)
 	h.mux.HandleFunc("GET /v1/runs/{id}", h.getRun)
 	h.mux.HandleFunc("POST /v1/runs/{id}/cancel", h.cancelRun)
@@ -200,6 +206,21 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
+	records, err := h.store.ListRuns(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
+		return
+	}
+
+	response := runsResponse{Runs: make([]runResponse, 0, len(records))}
+	for _, record := range records {
+		response.Runs = append(response.Runs, responseRun(record))
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 	record, err := h.store.FindRun(r.Context(), run.ID(r.PathValue("id")))
 	if err != nil {
@@ -211,6 +232,10 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, responseRun(record))
+}
+
+func responseRun(record postgres.RunRecord) runResponse {
 	response := runResponse{
 		ID:        record.Run.ID,
 		Status:    record.Run.Status,
@@ -226,8 +251,7 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 			RequestedAt: record.PendingApproval.RequestedAt,
 		}
 	}
-
-	writeJSON(w, http.StatusOK, response)
+	return response
 }
 
 func (h *Handler) getRunEvents(w http.ResponseWriter, r *http.Request) {

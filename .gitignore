@@ -4,6 +4,10 @@ bin/
 *.out
 coverage.out
 
+# Web inspector
+web/node_modules/
+web/dist/
+
 # Local configuration
 .env
 .env.*

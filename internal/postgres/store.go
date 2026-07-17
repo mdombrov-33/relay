@@ -28,7 +28,10 @@ var (
 	ErrRunNotFound           = errors.New("run was not found")
 )
 
-const eventPageSize = 100
+const (
+	eventPageSize = 100
+	runPageSize   = 100
+)
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -95,6 +98,69 @@ func (s *Store) FindRun(ctx context.Context, runID run.ID) (RunRecord, error) {
 	}
 
 	return record, nil
+}
+
+func (s *Store) ListRuns(ctx context.Context) ([]RunRecord, error) {
+	rows, err := s.pool.Query(
+		ctx,
+		`SELECT r.id, r.status, r.created_at, r.updated_at,
+		        ar.id, ar.step_key, ar.call_id, ar.tool_name, ar.requested_at
+		 FROM runs r
+		 LEFT JOIN approval_requests ar
+		   ON ar.run_id = r.id AND ar.status = 'pending'
+		 ORDER BY r.created_at DESC, r.id
+		 LIMIT $1`,
+		runPageSize,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query runs: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]RunRecord, 0)
+	for rows.Next() {
+		var (
+			record              RunRecord
+			approvalID          pgtype.Text
+			approvalStepKey     pgtype.Text
+			approvalCallID      pgtype.Text
+			approvalToolName    pgtype.Text
+			approvalRequestedAt pgtype.Timestamptz
+		)
+		if err := rows.Scan(
+			&record.Run.ID,
+			&record.Run.Status,
+			&record.CreatedAt,
+			&record.UpdatedAt,
+			&approvalID,
+			&approvalStepKey,
+			&approvalCallID,
+			&approvalToolName,
+			&approvalRequestedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan run row: %w", err)
+		}
+
+		if approvalID.Valid {
+			record.PendingApproval = &ApprovalRequestRecord{
+				ApprovalRequest: ApprovalRequest{
+					ID:       approvalID.String,
+					RunID:    record.Run.ID,
+					StepKey:  run.StepKey(approvalStepKey.String),
+					CallID:   approvalCallID.String,
+					ToolName: approvalToolName.String,
+				},
+				Status:      ApprovalStatusPending,
+				RequestedAt: approvalRequestedAt.Time,
+			}
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate run rows: %w", err)
+	}
+
+	return records, nil
 }
 
 func (s *Store) CreateRun(ctx context.Context, r run.Run, queued event.Envelope) error {
